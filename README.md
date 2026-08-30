@@ -76,7 +76,7 @@
 
 1. **克隆仓库**
 ```bash
-git clone https://github.com/YOUR_USERNAME/DiskWise.git
+git clone https://github.com/jack3344wong/DiskWise.git
 cd DiskWise
 ```
 
@@ -98,7 +98,7 @@ python src/main.py
 
 #### 方式二：便携版（推荐普通用户）
 
-1. 从 [Releases](https://github.com/YOUR_USERNAME/DiskWise/releases) 页面下载 `DiskWise-Portable-1.0.0.zip`
+1. 从 [Releases](https://github.com/jack3344wong/DiskWise/releases) 页面下载 `DiskWise-Portable-1.0.0.zip`
 2. 解压到任意目录
 3. 运行 `DiskWise.exe`
 
