@@ -98,9 +98,10 @@ python src/main.py
 
 #### 方式二：便携版（推荐普通用户）
 
-1. 从 [Releases](https://github.com/jack3344wong/DiskWise/releases) 页面下载 `DiskWise-Portable-1.0.0.zip`
-2. 解压到任意目录
-3. 运行 `DiskWise.exe`
+1. 从 [Releases](https://github.com/jack3344wong/DiskWise/releases/latest) 页面下载：
+   - **DiskWise-Setup-1.0.0.exe**（安装包，推荐）- 有安装向导，自动创建桌面快捷方式
+   - **DiskWise-Portable-1.0.0.zip**（便携版）- 解压后运行 `DiskWise.exe`
+2. 运行安装程序或解压后双击 `DiskWise.exe`
 
 ## 📦 打包发布
 
