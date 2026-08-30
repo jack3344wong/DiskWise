@@ -1,0 +1,7 @@
+PyQt5==5.15.11
+psutil==7.2.2
+pypdf>=3.0
+python-docx>=0.8
+openpyxl>=3.0
+python-pptx>=0.6
+striprtf>=0.0.20

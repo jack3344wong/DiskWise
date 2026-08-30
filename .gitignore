@@ -1,0 +1,68 @@
+# Local environments and IDE state
+.venv/
+.idea/
+.dsh-vision-router/
+
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+*_test_*/
+acceptance_*/
+scanner_test_*/
+
+# Generated handover notes and obsolete previews
+代码/PHASE*_*.md
+代码/PHASE*_*.txt
+代码/HANDOVER_SUMMARY.md
+预览/
+预览.html
+
+# Build output
+build/
+dist/
+installer-output/
+*.spec.bak
+
+# Preview files (development artifacts)
+preview_*.html
+*.preview.html
+preview/
+
+# Database files (user data)
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.old
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE and editor files
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Test output
+test_output/
+
+# Internal development documents (not for public release)
+HANDOVER.md
+IMPLEMENTATION_SUMMARY.md
+PROMPT_FOR_NEW_CHAT.md
+PROMPT_FOR_NEW_CHAT.txt
+GITHUB_RELEASE_GUIDE.md
+DiskWise_Project_Brief.docx
+docs/archive/
