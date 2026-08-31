@@ -288,11 +288,10 @@ class DiskMonitor(QMainWindow):
         self._home_btn.clicked.connect(self._show_detail_view)
         tb.addWidget(self._home_btn)
         
-        refresh = self._register_text("refresh", self._button("", QtWidgets.QStyle.SP_BrowserReload, self.refresh_folder, "primary"))
         self._scan_btn = self._register_text("space_scan", self._button("", QtWidgets.QStyle.SP_DriveHDIcon, self._show_scan_view))
         self._search_toolbar_btn = self._register_text("quick_search", self._button("", QtWidgets.QStyle.SP_FileDialogContentsView, self._show_search_view))
         recycle = self._register_text("recycle_bin", self._button("", QtWidgets.QStyle.SP_TrashIcon, self._open_recycle_bin))
-        tb.addWidget(refresh); tb.addWidget(self._scan_btn); tb.addWidget(self._search_toolbar_btn); tb.addWidget(recycle); tb.addStretch()
+        tb.addWidget(self._scan_btn); tb.addWidget(self._search_toolbar_btn); tb.addWidget(recycle); tb.addStretch()
         self.search_box = QtWidgets.QLineEdit()
         self.search_box.setMinimumWidth(240); self.search_box.textChanged.connect(self._on_search); tb.addWidget(self.search_box)
         self._language_label = self._register_text("language", QLabel())
@@ -437,8 +436,8 @@ class DiskMonitor(QMainWindow):
         self._scan_start = self._register_text("start_scan", self._button("", QtWidgets.QStyle.SP_MediaPlay, self._start_scan, "primary"))
         self._scan_cancel = self._register_text("cancel_scan", self._button("", QtWidgets.QStyle.SP_MediaStop, self._cancel_scan)); self._scan_cancel.setEnabled(False)
         row2.addWidget(self._scan_start); row2.addWidget(self._scan_cancel); row2.addStretch(); c.addLayout(row2)
-        self._scan_progress = QProgressBar(); self._scan_progress.setRange(0, 1); self._scan_progress.setValue(0); c.addWidget(self._scan_progress)
-        self._scan_status = self._register_text("scan_intro", QLabel()); self._scan_status.setWordWrap(True); c.addWidget(self._scan_status); outer.addWidget(controls)
+        self._scan_progress = QProgressBar(); self._scan_progress.setRange(0, 1); self._scan_progress.setValue(0); self._scan_progress.setFixedHeight(10); self._scan_progress.setTextVisible(False); c.addWidget(self._scan_progress)
+        self._scan_status = self._register_text("scan_intro", QLabel()); self._scan_status.setWordWrap(True); self._scan_status.setMinimumHeight(40); c.addWidget(self._scan_status); outer.addWidget(controls)
 
         results = QTabWidget(); self._large_files = self._result_tree(["名称", "实际占用", "逻辑大小", "修改时间", "来源软件", "完整路径"])
         self._large_folders = self._result_tree(["文件夹", "实际占用", "逻辑大小", "文件数", "子文件夹数", "来源软件", "完整路径"])

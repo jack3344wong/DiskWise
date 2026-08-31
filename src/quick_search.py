@@ -101,7 +101,7 @@ class FileIndexDB:
         conn.execute("DELETE FROM files WHERE drive = ?", (drive,))
         conn.commit()
 
-    def search(self, query: str, max_results: int = 500,
+    def search(self, query: str, max_results: int = 1000,
                drive_filter: str = "", ext_filter: str = "",
                is_dir_filter: Optional[bool] = None,
                path_filter: str = "") -> List[Dict]:
@@ -347,10 +347,10 @@ class IndexBuildThread(QThread):
                         full_path, name, name.lower(), ext,
                         st.st_size, st.st_mtime, 0, drive,
                     ))
+                    count += 1
                 except (OSError, PermissionError):
                     continue
 
-                count += 1
                 if len(batch) >= BATCH_SIZE:
                     self.db.insert_batch(batch)
                     batch.clear()
