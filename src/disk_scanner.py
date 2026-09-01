@@ -131,6 +131,8 @@ class DiskScannerThread(QThread):
         own_file_counts = defaultdict(int)
         parents = {}
         file_ids = set()
+        # 达到阈值的文件 → Treemap 叶子节点（按所在目录分组）
+        file_leaf_nodes = defaultdict(list)
         try:
             def on_walk_error(exc):
                 result["errors"].append({"path": getattr(exc, "filename", self.root_path), "error": str(exc)})
@@ -188,6 +190,12 @@ class DiskScannerThread(QThread):
                                 "extension": os.path.splitext(name)[1].lower() or "无扩展名",
                                 "cloud_only": cloud_only,
                             })
+                            # 同时作为 Treemap 叶子节点（如 pagefile.sys 这类大文件）
+                            file_leaf_nodes[root].append({
+                                "name": name, "path": path, "size": logical,
+                                "allocated": allocated, "file_count": 1,
+                                "folder_count": 0, "is_file": True, "children": [],
+                            })
                         advice = _suggestion(path, st.st_mtime, cloud_only)
                         if advice and logical >= self.threshold_bytes:
                             level, reason, risk = advice
@@ -219,6 +227,48 @@ class DiskScannerThread(QThread):
                     allocated_totals[parent] = allocated_totals.get(parent, 0) + allocated_totals.get(directory, 0)
                     file_totals[parent] = file_totals.get(parent, 0) + file_totals.get(directory, 0)
                     folder_totals[parent] += 1 + folder_totals.get(directory, 0)
+            # 构建文件夹层级树（用于 Treemap 可视化）
+            folder_tree = {}
+            for path in sorted(all_dirs, key=lambda p: p.count(os.sep)):
+                folder_tree[path] = {
+                    "name": os.path.basename(path) or path,
+                    "path": path,
+                    "size": totals.get(path, 0),
+                    "allocated": allocated_totals.get(path, 0),
+                    "file_count": file_totals.get(path, 0),
+                    "folder_count": folder_totals.get(path, 0),
+                    "children": []
+                }
+            
+            # 添加子节点关系
+            for path, parent in parents.items():
+                if parent in folder_tree and path in folder_tree:
+                    folder_tree[parent]["children"].append(folder_tree[path])
+
+            # 添加大文件叶子节点（让 pagefile.sys 等文件也显示在 Treemap 中）
+            for parent, leaves in file_leaf_nodes.items():
+                if parent in folder_tree:
+                    folder_tree[parent]["children"].extend(leaves)
+            
+            # 按大小排序子节点
+            def sort_children(node):
+                node["children"].sort(key=lambda x: x["size"], reverse=True)
+                for child in node["children"]:
+                    sort_children(child)
+            
+            if self.root_path in folder_tree:
+                sort_children(folder_tree[self.root_path])
+            
+            result["folder_tree"] = folder_tree.get(self.root_path, {
+                "name": os.path.basename(self.root_path) or self.root_path,
+                "path": self.root_path,
+                "size": totals.get(self.root_path, 0),
+                "allocated": allocated_totals.get(self.root_path, 0),
+                "file_count": file_totals.get(self.root_path, 0),
+                "folder_count": folder_totals.get(self.root_path, 0),
+                "children": []
+            })
+            
             result["large_folders"] = [
                 {"name": os.path.basename(path) or path, "path": path,
                  "size": totals.get(path, 0), "allocated": allocated_totals.get(path, 0),

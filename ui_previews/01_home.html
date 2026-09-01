@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>DiskWise — 首页 · Minimalism Preview</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; background:#f5f6f8; color:#2c3e50; }
+
+  .window {
+    width: 1100px; margin: 40px auto; background: #fff; border-radius: 14px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.08); overflow: hidden;
+  }
+
+  /* Title bar */
+  .titlebar {
+    height: 44px; background: linear-gradient(135deg, #e8edf2 0%, #f0f2f5 100%);
+    display: flex; align-items: center; padding: 0 18px; border-bottom: 1px solid #e2e6ea;
+  }
+  .titlebar .dots { display: flex; gap: 7px; }
+  .titlebar .dots span { width: 12px; height: 12px; border-radius: 50%; }
+  .titlebar .dots .r { background: #ff5f57; }
+  .titlebar .dots .y { background: #febc2e; }
+  .titlebar .dots .g { background: #28c840; }
+  .titlebar .title { flex:1; text-align:center; font-size:13px; color:#8e99a4; font-weight:500; letter-spacing:0.5px; }
+
+  /* Nav tabs */
+  .nav {
+    display: flex; border-bottom: 1px solid #eef0f3; padding: 0 24px; background: #fafbfc;
+  }
+  .nav-item {
+    padding: 14px 22px; font-size: 14px; color: #8e99a4; cursor: pointer;
+    border-bottom: 2.5px solid transparent; transition: all 0.2s;
+  }
+  .nav-item:hover { color: #4a90d9; }
+  .nav-item.active { color: #4a90d9; border-bottom-color: #4a90d9; font-weight: 600; }
+
+  /* Content area */
+  .content { padding: 28px 32px; }
+
+  /* Greeting */
+  .greeting { margin-bottom: 28px; }
+  .greeting h1 { font-size: 24px; font-weight: 700; color: #1a2332; }
+  .greeting p { font-size: 13px; color: #a0aab4; margin-top: 4px; }
+
+  /* Disk cards */
+  .disks { display: flex; gap: 18px; margin-bottom: 28px; }
+  .disk-card {
+    flex: 1; background: #fff; border: 1px solid #eef0f3; border-radius: 12px;
+    padding: 22px 24px; transition: box-shadow 0.2s;
+  }
+  .disk-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.06); }
+  .disk-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .disk-name { font-size: 15px; font-weight: 600; color: #2c3e50; }
+  .disk-name .icon { margin-right: 8px; }
+  .disk-pct { font-size: 28px; font-weight: 700; }
+  .disk-pct.ok { color: #4a90d9; }
+  .disk-pct.warn { color: #e67e22; }
+  .disk-pct.danger { color: #e74c3c; }
+
+  .progress-bar { height: 6px; background: #eef0f3; border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
+  .progress-fill { height: 100%; border-radius: 3px; transition: width 0.6s ease; }
+  .progress-fill.ok { background: linear-gradient(90deg, #4a90d9, #6cb4f0); }
+  .progress-fill.warn { background: linear-gradient(90deg, #e67e22, #f0a050); }
+  .progress-fill.danger { background: linear-gradient(90deg, #e74c3c, #f07070); }
+
+  .disk-detail { font-size: 12px; color: #a0aab4; display: flex; justify-content: space-between; }
+
+  /* Quick actions */
+  .actions-title { font-size: 15px; font-weight: 600; color: #2c3e50; margin-bottom: 14px; }
+  .actions { display: flex; gap: 14px; }
+  .action-card {
+    flex: 1; background: #f8f9fb; border: 1px solid #eef0f3; border-radius: 10px;
+    padding: 18px 20px; display: flex; align-items: center; gap: 14px;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .action-card:hover { background: #eef3ff; border-color: #c5d8f5; }
+  .action-icon {
+    width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center;
+    justify-content: center; font-size: 20px;
+  }
+  .action-icon.scan { background: #e8f4fd; color: #4a90d9; }
+  .action-icon.search { background: #e8fdf0; color: #27ae60; }
+  .action-icon.recycle { background: #fde8e8; color: #e74c3c; }
+  .action-icon.settings { background: #f3e8fd; color: #8e44ad; }
+  .action-text h3 { font-size: 13px; font-weight: 600; color: #2c3e50; }
+  .action-text p { font-size: 11px; color: #a0aab4; margin-top: 2px; }
+
+  /* Status bar */
+  .statusbar {
+    height: 32px; background: #f8f9fb; border-top: 1px solid #eef0f3;
+    display: flex; align-items: center; padding: 0 20px; font-size: 11px; color: #a0aab4;
+    justify-content: space-between;
+  }
+  .statusbar .status-disk { display: flex; align-items: center; gap: 6px; }
+  .statusbar .mini-bar { width: 60px; height: 4px; background: #eef0f3; border-radius: 2px; overflow: hidden; }
+  .statusbar .mini-fill { height: 100%; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="dots"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="title">磁盘智理 · DiskWise</div>
+    <div style="width:50px"></div>
+  </div>
+
+  <div class="nav">
+    <div class="nav-item active">🏠 首页</div>
+    <div class="nav-item">💾 磁盘空间扫描</div>
+    <div class="nav-item">🔍 快速搜索</div>
+    <div class="nav-item">🗑️ 回收站管理</div>
+  </div>
+
+  <div class="content">
+    <div class="greeting">
+      <h1>你好，欢迎回来 👋</h1>
+      <p>上次扫描：2026年9月2日 14:32 · 磁盘健康状态良好</p>
+    </div>
+
+    <div class="disks">
+      <div class="disk-card">
+        <div class="disk-header">
+          <div class="disk-name"><span class="icon">💻</span>C: 系统盘</div>
+          <div class="disk-pct ok">17%</div>
+        </div>
+        <div class="progress-bar"><div class="progress-fill ok" style="width:17%"></div></div>
+        <div class="disk-detail"><span>已用 152.7 GB</span><span>总共 878.0 GB</span></div>
+      </div>
+      <div class="disk-card">
+        <div class="disk-header">
+          <div class="disk-name"><span class="icon">📦</span>D: 数据盘</div>
+          <div class="disk-pct warn">39%</div>
+        </div>
+        <div class="progress-bar"><div class="progress-fill warn" style="width:39%"></div></div>
+        <div class="disk-detail"><span>已用 401.8 GB</span><span>总共 1.0 TB</span></div>
+      </div>
+    </div>
+
+    <div class="actions-title">快捷操作</div>
+    <div class="actions">
+      <div class="action-card">
+        <div class="action-icon scan">📊</div>
+        <div class="action-text">
+          <h3>磁盘空间扫描</h3>
+          <p>分析大文件和文件夹占用</p>
+        </div>
+      </div>
+      <div class="action-card">
+        <div class="action-icon search">🔍</div>
+        <div class="action-text">
+          <h3>快速搜索</h3>
+          <p>按文件名或内容查找</p>
+        </div>
+      </div>
+      <div class="action-card">
+        <div class="action-icon recycle">🗑️</div>
+        <div class="action-text">
+          <h3>回收站管理</h3>
+          <p>查看和清理已删除文件</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <div>就绪</div>
+    <div style="display:flex;gap:20px;">
+      <div class="status-disk">
+        <span>C:</span>
+        <div class="mini-bar"><div class="mini-fill" style="width:17%;background:#4a90d9"></div></div>
+        <span>17.4%</span>
+      </div>
+      <div class="status-disk">
+        <span>D:</span>
+        <div class="mini-bar"><div class="mini-fill" style="width:39%;background:#e67e22"></div></div>
+        <span>39.1%</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

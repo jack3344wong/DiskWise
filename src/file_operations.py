@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """文件删除和回收站管理 - 安全的文件移动/恢复/搜索 (File Operations & Recycle Bin)"""
+import json
 import os
 import shutil
 import fnmatch
+import time
 
 
 class FileOperations:
@@ -14,6 +16,19 @@ class FileOperations:
             os.makedirs(self.recycle_bin_path, exist_ok=True)
         except OSError as e:
             print(f"[FileOperations] 创建回收站目录失败: {e}")
+
+    def _write_meta(self, recycle_file_path, origin_path):
+        """在回收站条目旁写入元数据（原路径、删除时间）。"""
+        try:
+            meta = {
+                "origin_path": origin_path,
+                "deleted_at": time.time(),
+                "deleted_at_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            }
+            with open(recycle_file_path + ".meta.json", "w", encoding="utf-8") as fh:
+                json.dump(meta, fh, ensure_ascii=False)
+        except OSError:
+            pass
 
     def move_to_recycle_bin(self, file_path):
         """
@@ -35,6 +50,7 @@ class FileOperations:
                 counter += 1
 
             shutil.move(file_path, new_path)
+            self._write_meta(new_path, os.path.abspath(file_path))
             return True, f"已将 '{file_name}' 移入回收站"
 
         except PermissionError:
@@ -59,6 +75,10 @@ class FileOperations:
                 os.makedirs(target_dir, exist_ok=True)
 
             shutil.move(recycle_path, target_path)
+            try:
+                os.remove(recycle_path + ".meta.json")
+            except OSError:
+                pass
             return True, f"已恢复到: {target_path}"
 
         except PermissionError:
@@ -96,6 +116,13 @@ class FileOperations:
 
             count = 0
             for name in os.listdir(self.recycle_bin_path):
+                if name.endswith(".meta.json"):
+                    # 元数据文件随主文件一起清理，不单独计数
+                    try:
+                        os.remove(os.path.join(self.recycle_bin_path, name))
+                    except OSError:
+                        pass
+                    continue
                 full = os.path.join(self.recycle_bin_path, name)
                 try:
                     if os.path.isfile(full):
@@ -104,6 +131,10 @@ class FileOperations:
                     elif os.path.isdir(full):
                         shutil.rmtree(full)
                         count += 1
+                    try:
+                        os.remove(full + ".meta.json")
+                    except OSError:
+                        pass
                 except Exception:
                     continue
 

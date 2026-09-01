@@ -183,8 +183,8 @@ class FileIndexDB:
                     END,
                     size DESC
             """
-            params.insert(0, clean_query.lower() + "%")
-            params.insert(1, f"%{clean_query.lower()}%")
+            params.append(clean_query.lower() + "%")
+            params.append(f"%{clean_query.lower()}%")
         else:
             order = "ORDER BY size DESC"
 

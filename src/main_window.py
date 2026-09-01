@@ -2,6 +2,7 @@
 """磁盘智理 / DiskWise 完整主窗口。"""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -15,7 +16,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QAction, QAbstractSpinBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox,
-    QProgressBar, QPushButton, QSizePolicy, QSpinBox, QTabWidget, QTreeWidget,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -26,6 +27,7 @@ from web_search import WebSearch
 from quick_search import QuickSearchEngine
 from fulltext_search import FullTextSearchEngine
 from content_extractor import ContentExtractor
+from treemap_widget import TreemapWidget
 
 
 APP_NAME_ZH = "磁盘智理"
@@ -67,9 +69,58 @@ class TriangleDoubleSpinBox(_TriangleSpinMixin, QDoubleSpinBox):
 class TriangleSpinBox(_TriangleSpinMixin, QSpinBox):
     pass
 
+
+class SearchModeTabs(QWidget):
+    """文件名搜索 / 内容搜索 — 下划线式标签（Minimalism 风格，绿色激活）。
+
+    提供 currentIndex() / setCurrentIndex() / setTabText() / currentChanged 信号，
+    与旧 QTabWidget 调用点保持兼容。
+    """
+    currentChanged = QtCore.pyqtSignal(int)
+
+    def __init__(self, labels):
+        super().__init__()
+        self._index = 0
+        self._buttons = []
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+        for i, text in enumerate(labels):
+            b = QPushButton(text)
+            b.setObjectName("searchModeTab")
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, idx=i: self.setCurrentIndex(idx))
+            self._buttons.append(b)
+            h.addWidget(b)
+        h.addStretch()
+        self._refresh_styles()
+
+    def _refresh_styles(self):
+        for i, b in enumerate(self._buttons):
+            b.setProperty("class", "active" if i == self._index else "")
+            b.style().unpolish(b)
+            b.style().polish(b)
+
+    def currentIndex(self):
+        return self._index
+
+    def setCurrentIndex(self, i):
+        if i == self._index:
+            return
+        self._index = i
+        self._refresh_styles()
+        self.currentChanged.emit(i)
+
+    def setTabText(self, i, text):
+        if 0 <= i < len(self._buttons):
+            self._buttons[i].setText(text)
+
 TRANSLATIONS = {
     "zh": {
         "app_name": APP_NAME_ZH, "refresh": "刷新", "space_scan": "磁盘空间扫描", "recycle_bin": "回收站管理",
+        "home": "首页", "file_browse": "文件管理",
+        "nav_home": "🏠 首页", "nav_browse": "📂 文件管理", "nav_scan": "💾 磁盘空间扫描",
+        "nav_search": "🔍 快速搜索", "nav_recycle": "🗑️ 回收站管理",
         "search": "搜索当前目录...", "language": "语言", "language_zh": "中文", "language_en": "English", "back": "返回上一位置", "up": "返回上级目录", "root": "返回磁盘根目录",
         "file_details": "文件详情", "scan_tab": "空间扫描", "detail_title": "文件与软件详情", "disk_usage": "磁盘使用情况",
         "name": "名称", "full_path": "完整路径", "size": "大小", "mtime": "修改时间", "item_type": "项目类型",
@@ -88,9 +139,28 @@ TRANSLATIONS = {
         "preview_title": "文档预览", "preview_hint": "点击搜索结果预览内容", "preview_no_support": "该文件类型不支持预览",
         "search_results": "搜索结果", "no_results": "未找到匹配结果", "result_count": "共 {count} 条结果",
         "open_file": "打开文件", "open_folder": "打开所在目录",
+        # ── 首页 ──
+        "home_greeting": "你好，欢迎回来 👋",
+        "home_greeting_sub": "上次扫描：{time} · 磁盘健康状态良好",
+        "home_quick_actions": "快捷操作",
+        "home_action_scan_sub": "分析大文件和文件夹占用",
+        "home_action_search_sub": "按文件名或内容查找",
+        "home_action_recycle_sub": "查看和清理已删除文件",
+        "home_system_drive": "系统盘", "home_data_drive": "数据盘",
+        "home_used": "已用 {size}", "home_total": "总共 {size}",
+        "status_ready": "就绪",
+        # ── 回收站页面 ──
+        "rb_files_count": "文件数量", "rb_space_used": "占用空间", "rb_oldest": "最早删除", "rb_new_this_week": "本周新增",
+        "rb_select_all": "全选", "rb_delete_selected": "永久删除选中", "rb_restore_selected": "恢复选中", "rb_empty": "清空回收站",
+        "rb_col_name": "文件名", "rb_col_origin": "原路径", "rb_col_size": "大小", "rb_col_deleted": "删除时间", "rb_col_actions": "操作",
+        "rb_restore": "恢复", "rb_permanent": "永久删除", "rb_selected_n": "已选择 {n} 项",
+        "rb_days_ago": "{n} 天前", "rb_empty_bin": "回收站为空",
     },
     "en": {
         "app_name": APP_NAME_EN, "refresh": "Refresh", "space_scan": "Disk Space Scan", "recycle_bin": "Recycle Bin",
+        "home": "Home", "file_browse": "File Browser",
+        "nav_home": "🏠 Home", "nav_browse": "📂 Files", "nav_scan": "💾 Disk Space Scan",
+        "nav_search": "🔍 Quick Search", "nav_recycle": "🗑️ Recycle Bin",
         "search": "Search current folder...", "language": "Language", "language_zh": "Chinese", "language_en": "English", "back": "Previous Location", "up": "Parent Folder", "root": "Drive Root",
         "file_details": "File Details", "scan_tab": "Space Scan", "detail_title": "File & Software Details", "disk_usage": "Disk Usage",
         "name": "Name", "full_path": "Full Path", "size": "Size", "mtime": "Modified", "item_type": "Item Type",
@@ -109,6 +179,22 @@ TRANSLATIONS = {
         "preview_title": "Document Preview", "preview_hint": "Click a result to preview content", "preview_no_support": "This file type is not previewable",
         "search_results": "Search Results", "no_results": "No matching results", "result_count": "{count} results",
         "open_file": "Open File", "open_folder": "Open Location",
+        # ── Home ──
+        "home_greeting": "Welcome back 👋",
+        "home_greeting_sub": "Last scan: {time} · Disk health is good",
+        "home_quick_actions": "Quick Actions",
+        "home_action_scan_sub": "Analyze large files and folders",
+        "home_action_search_sub": "Find files by name or content",
+        "home_action_recycle_sub": "Review and clean deleted files",
+        "home_system_drive": "System Drive", "home_data_drive": "Data Drive",
+        "home_used": "Used {size}", "home_total": "Total {size}",
+        "status_ready": "Ready",
+        # ── Recycle page ──
+        "rb_files_count": "Files", "rb_space_used": "Space Used", "rb_oldest": "Oldest Item", "rb_new_this_week": "New This Week",
+        "rb_select_all": "Select All", "rb_delete_selected": "Delete Selected", "rb_restore_selected": "Restore Selected", "rb_empty": "Empty Recycle Bin",
+        "rb_col_name": "File Name", "rb_col_origin": "Original Path", "rb_col_size": "Size", "rb_col_deleted": "Deleted", "rb_col_actions": "Actions",
+        "rb_restore": "Restore", "rb_permanent": "Delete Forever", "rb_selected_n": "{n} selected",
+        "rb_days_ago": "{n} days ago", "rb_empty_bin": "Recycle bin is empty",
     },
 }
 
@@ -132,48 +218,187 @@ def format_time(timestamp):
         return "未知"
 
 
+# ── Minimalism 风格配色（与 ui_previews/*.html 预览图一致） ──
+M_BG = "#f5f6f8"          # 页面背景
+M_CARD = "#ffffff"        # 卡片背景
+M_CARD_SOFT = "#f8f9fb"   # 次级卡片背景
+M_BORDER = "#eef0f3"      # 卡片/分隔线边框
+M_BORDER_2 = "#e2e6ea"    # 输入框边框
+M_TEXT = "#2c3e50"        # 主文字
+M_TEXT_2 = "#8e99a4"      # 次级文字
+M_TEXT_3 = "#a0aab4"      # 弱化文字
+M_ACCENT = "#4a90d9"      # 主色（蓝）
+M_ACCENT_HOVER = "#3a7bc8"
+M_GREEN = "#27ae60"
+M_ORANGE = "#e67e22"
+M_RED = "#e74c3c"
+
 STYLESHEET = """
-QMainWindow { background:#e8edf5; }
-QFrame#sidebar, QFrame#card { background:white; border-radius:10px; }
-QFrame#toolbar { background:white; border-bottom:1px solid #dfe3e8; min-height:54px; max-height:54px; }
-QLabel#title { font-size:17px; font-weight:700; color:#26384a; padding:10px; }
-QLabel#sectionTitle { font-size:16px; font-weight:700; color:#26384a; padding:4px 0 10px 0; }
-QLabel#key { color:#73808c; font-size:12px; }
-QLabel#value { color:#263238; font-size:12px; }
-QLabel#pathBar { background:#f7f9fb; border:1px solid #dfe3e8; border-radius:6px; padding:7px 9px; color:#52606d; }
-QPushButton { min-height:30px; padding:4px 11px; border-radius:6px; border:1px solid #d7dce2; background:#fff; color:#34495e; }
-QPushButton:hover { border-color:#4a90e2; background:#eef5fd; }
-QPushButton:disabled { color:#adb5bd; background:#f1f3f5; }
-QPushButton#primary { background:#4a90e2; color:white; border-color:#4a90e2; }
-QPushButton#danger:hover { background:#e74c3c; color:white; border-color:#e74c3c; }
-QPushButton#action, QPushButton#deleteAction { min-height:40px; padding:8px 14px; text-align:left; }
-QPushButton#deleteAction:hover { background:#e74c3c; color:white; border-color:#e74c3c; }
-QTreeWidget { background:white; border:1px solid #e1e5ea; border-radius:7px; alternate-background-color:#f8fafc; }
-QTreeWidget::item { min-height:27px; padding:3px; }
-QTreeWidget::item:selected { background:#4a90e2; color:white; }
-QHeaderView::section { background:#f4f6f8; border:none; border-bottom:1px solid #dfe3e8; padding:7px; font-weight:600; color:#52606d; }
-QLineEdit, QComboBox { min-height:30px; border:1px solid #d7dce2; border-radius:6px; padding:2px 8px; background:white; }
-QSpinBox, QDoubleSpinBox { min-height:30px; border:1px solid #d7dce2; border-radius:6px; padding:2px 8px; background:white; }
-QComboBox QAbstractItemView {
-    background:#ffffff;
-    color:#26384a;
-    border:1px solid #b9c7d6;
-    outline:0;
-    selection-background-color:rgba(74,144,226,55);
-    selection-color:#163a59;
+* { font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+QMainWindow { background:%(bg)s; color:%(text)s; }
+QWidget#page { background:%(bg)s; }
+QFrame#toolbar { background:#fafbfc; border-bottom:1px solid %(border)s; min-height:52px; max-height:52px; }
+QLabel#title { font-size:15px; font-weight:700; color:%(text)s; padding:8px; }
+QLabel#sectionTitle { font-size:15px; font-weight:600; color:%(text)s; padding:4px 0 8px 0; }
+QLabel#key { color:%(text3)s; font-size:12px; }
+QLabel#value { color:%(text)s; font-size:12px; }
+QLabel#pathBar { background:%(cardoft)s; border:1px solid %(border2)s; border-radius:6px; padding:7px 9px; color:#52606d; }
+QFrame#sidebar, QFrame#card { background:%(card)s; border:1px solid %(border)s; border-radius:12px; }
+QFrame#statusBar { background:%(cardoft)s; border-top:1px solid %(border)s; }
+
+/* ── 顶部导航标签（下划线式，Minimalism） ── */
+QPushButton#navTab {
+    background:transparent; border:none; border-bottom:2.5px solid transparent;
+    color:%(text2)s; font-size:14px; padding:13px 20px 11px 20px; border-radius:0; min-height:0;
 }
-QComboBox QAbstractItemView::item { min-height:28px; padding:4px 8px; color:#26384a; }
-QComboBox QAbstractItemView::item:hover { background:rgba(74,144,226,38); color:#163a59; }
-QComboBox QAbstractItemView::item:selected { background:rgba(74,144,226,72); color:#163a59; }
-QMenu { background:white; color:#26384a; border:1px solid #cfd8e2; padding:5px; }
-QMenu::item { padding:7px 28px 7px 10px; border-radius:4px; }
-QMenu::item:selected { background:rgba(74,144,226,45); color:#163a59; }
-QTabWidget::pane { border:0; }
-QTabBar::tab { padding:9px 18px; color:#52606d; }
-QTabBar::tab:selected { color:#2f78c4; border-bottom:2px solid #4a90e2; }
-QProgressBar { border:0; background:#e9edf2; border-radius:5px; min-height:10px; max-height:10px; text-align:center; }
-QProgressBar::chunk { background:#4a90e2; border-radius:5px; }
-"""
+QPushButton#navTab:hover { color:%(accent)s; background:rgba(74,144,217,0.06); }
+QPushButton#navTab[class="active"] { color:%(accent)s; border-bottom:2.5px solid %(accent)s; font-weight:600; background:transparent; }
+
+/* ── 按钮 ── */
+QPushButton {
+    min-height:30px; padding:6px 14px; border-radius:8px;
+    border:1px solid %(border2)s; background:%(card)s; color:%(text)s; font-size:13px;
+}
+QPushButton:hover { border-color:#b8d4f0; background:#eef3ff; }
+QPushButton:disabled { color:#c0c8d0; background:%(cardoft)s; border-color:%(border)s; }
+QPushButton#primary { background:%(accent)s; color:white; border:1px solid %(accent)s; font-weight:500; }
+QPushButton#primary:hover { background:%(accenthover)s; border-color:%(accenthover)s; }
+QPushButton#primary:disabled { background:#a8c8e8; border-color:#a8c8e8; color:white; }
+QPushButton#danger { color:%(red)s; border-color:#f5c6c6; background:%(card)s; }
+QPushButton#danger:hover { background:#fdf0f0; border-color:%(red)s; }
+QPushButton#dangerSolid { background:%(red)s; color:white; border:1px solid %(red)s; }
+QPushButton#dangerSolid:hover { background:#c0392b; }
+QPushButton#success { color:%(accent)s; border-color:#b8d4f0; background:%(card)s; }
+QPushButton#success:hover { background:#eef3ff; }
+QPushButton#action, QPushButton#deleteAction { min-height:40px; padding:9px 14px; text-align:left; }
+QPushButton#deleteAction { color:%(red)s; border-color:#f5c6c6; }
+QPushButton#deleteAction:hover { background:#fdf0f0; border-color:%(red)s; color:%(red)s; }
+QPushButton#chip {
+    border:1px solid %(border2)s; color:%(text2)s; background:#fafbfc;
+    border-radius:20px; padding:5px 14px; min-height:0; font-size:12px;
+}
+QPushButton#chip:hover { border-color:#b8d4f0; color:%(accent)s; }
+QPushButton#chip[class="active"] { background:#e8f4fd; border-color:#b8d4f0; color:%(accent)s; }
+QPushButton#navBack { padding:6px 14px; font-size:12px; color:%(text2)s; background:%(cardoft)s; }
+QPushButton#navBack:hover { background:#eef3ff; border-color:#b8d4f0; color:%(accent)s; }
+
+/* ── 首页快捷操作卡片 ── */
+QPushButton#actionCard {
+    background:%(cardoft)s; border:1px solid %(border)s; border-radius:12px;
+    text-align:left; min-height:86px; padding:0px;
+}
+QPushButton#actionCard:hover { background:#eef3ff; border-color:#c5d8f5; }
+QLabel#actionTitle { font-size:13px; font-weight:600; color:%(text)s; }
+QLabel#actionSub { font-size:11px; color:%(text3)s; }
+QLabel#homeGreeting { font-size:24px; font-weight:700; color:#1a2332; }
+QLabel#homeGreetingSub { font-size:13px; color:%(text3)s; }
+QLabel#diskPct { font-size:26px; font-weight:700; }
+QLabel#diskName { font-size:14px; font-weight:600; color:%(text)s; }
+QLabel#diskDetail { font-size:12px; color:%(text3)s; }
+QLabel#summaryLabel { font-size:11px; color:%(text3)s; letter-spacing:0.5px; }
+QLabel#summaryValue { font-size:24px; font-weight:700; color:%(text)s; }
+
+/* ── 搜索模式标签（下划线式，绿色激活） ── */
+QPushButton#searchModeTab {
+    background:transparent; border:none; border-bottom:2px solid transparent;
+    color:%(text2)s; font-size:13px; padding:8px 20px 7px 20px; border-radius:0; min-height:0;
+}
+QPushButton#searchModeTab:hover { color:%(green)s; }
+QPushButton#searchModeTab[class="active"] { color:%(green)s; border-bottom:2px solid %(green)s; font-weight:600; background:transparent; }
+
+/* ── 搜索结果索引状态 ── */
+QLabel#indexDot { background:%(green)s; border-radius:3px; min-width:6px; max-width:6px; min-height:6px; max-height:6px; }
+
+/* ── 输入控件 ── */
+QLineEdit {
+    min-height:34px; border:1.5px solid %(border2)s; border-radius:10px;
+    padding:2px 12px; background:%(cardoft)s; font-size:13px; color:%(text)s;
+}
+QLineEdit:focus { border-color:%(accent)s; background:white; }
+QComboBox {
+    min-height:32px; border:1px solid %(border2)s; border-radius:8px;
+    padding:2px 10px; background:%(card)s; font-size:13px; color:%(text)s;
+}
+QComboBox:hover { border-color:#b8d4f0; }
+QComboBox::drop-down { border:none; width:22px; }
+QSpinBox, QDoubleSpinBox { min-height:30px; border:1px solid %(border2)s; border-radius:8px; padding:2px 8px; background:%(card)s; }
+QComboBox QAbstractItemView {
+    background:white; color:%(text)s; border:1px solid %(border2)s; outline:0;
+    selection-background-color:rgba(74,144,217,0.18); selection-color:#163a59;
+}
+QComboBox QAbstractItemView::item { min-height:30px; padding:4px 10px; }
+QComboBox QAbstractItemView::item:hover { background:#eef3ff; }
+
+/* ── 列表/树 ── */
+QTreeWidget {
+    background:%(card)s; border:1px solid %(border)s; border-radius:10px;
+    alternate-background-color:#fafbfc; font-size:13px;
+}
+QTreeWidget::item { min-height:30px; padding:4px 6px; border-bottom:1px solid %(bg)s; }
+QTreeWidget::item:hover { background:%(cardoft)s; }
+QTreeWidget::item:selected { background:#eef3ff; color:%(text)s; }
+QHeaderView::section {
+    background:%(cardoft)s; border:none; border-bottom:1px solid %(border)s;
+    padding:8px; font-weight:500; color:%(text2)s; font-size:12px;
+}
+QListWidget {
+    background:%(card)s; border:1px solid %(border)s; border-radius:10px; font-size:13px;
+}
+QListWidget::item { min-height:32px; padding:6px 10px; border-bottom:1px solid %(bg)s; }
+QListWidget::item:hover { background:%(cardoft)s; }
+QListWidget::item:selected { background:#eef3ff; color:%(text)s; }
+
+/* ── 菜单 ── */
+QMenu { background:white; color:%(text)s; border:1px solid %(border)s; border-radius:10px; padding:6px; }
+QMenu::item { padding:8px 28px 8px 12px; border-radius:6px; font-size:13px; }
+QMenu::item:selected { background:#eef3ff; color:#163a59; }
+QMenu::separator { height:1px; background:%(border)s; margin:4px 8px; }
+
+/* ── 标签页（扫描结果区） ── */
+QTabWidget::pane { border:1px solid %(border)s; border-radius:10px; background:%(card)s; top:-1px; }
+QTabBar { background:transparent; }
+QTabBar::tab {
+    padding:9px 18px; color:%(text2)s; font-size:13px;
+    border:none; border-bottom:2px solid transparent; margin-right:2px; background:transparent;
+}
+QTabBar::tab:hover { color:%(accent)s; }
+QTabBar::tab:selected { color:%(accent)s; border-bottom:2px solid %(accent)s; font-weight:600; }
+
+/* ── 进度条 ── */
+QProgressBar { border:0; background:%(border)s; border-radius:4px; min-height:8px; max-height:8px; text-align:center; }
+QProgressBar::chunk { background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 %(accent)s, stop:1 #6cb4f0); border-radius:4px; }
+
+/* ── 滚动条（细线风格） ── */
+QScrollBar:vertical { background:transparent; width:10px; margin:2px; }
+QScrollBar::handle:vertical { background:#d5dae0; border-radius:4px; min-height:30px; }
+QScrollBar::handle:vertical:hover { background:#b8c0c9; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
+QScrollBar:horizontal { background:transparent; height:10px; margin:2px; }
+QScrollBar::handle:horizontal { background:#d5dae0; border-radius:4px; min-width:30px; }
+QScrollBar::handle:horizontal:hover { background:#b8c0c9; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width:0; }
+
+/* ── 文本编辑区 ── */
+QPlainTextEdit, QTextEdit {
+    background:%(cardoft)s; border:1px solid %(border)s; border-radius:8px;
+    font-family:Consolas,'Microsoft YaHei',monospace; font-size:13px; color:%(text)s;
+}
+
+/* ── 复选框 ── */
+QCheckBox { spacing:8px; font-size:13px; color:%(text)s; }
+QCheckBox::indicator { width:17px; height:17px; border:1.5px solid #d0d5db; border-radius:4px; background:white; }
+QCheckBox::indicator:hover { border-color:%(accent)s; }
+QCheckBox::indicator:checked { background:%(accent)s; border-color:%(accent)s; image:none; }
+
+/* ── 工具提示 ── */
+QToolTip { background:white; color:%(text)s; border:1px solid %(border2)s; border-radius:6px; padding:6px 10px; font-size:12px; }
+
+QDialog { background:%(bg)s; }
+""" % {
+    "bg": M_BG, "card": M_CARD, "cardoft": M_CARD_SOFT, "border": M_BORDER, "border2": M_BORDER_2,
+    "text": M_TEXT, "text2": M_TEXT_2, "text3": M_TEXT_3,
+    "accent": M_ACCENT, "accenthover": M_ACCENT_HOVER, "green": M_GREEN, "red": M_RED,
+}
 
 
 class DiskMonitor(QMainWindow):
@@ -195,13 +420,14 @@ class DiskMonitor(QMainWindow):
         self._last_identity = None
         self._detail_path = None
         self.web_search = WebSearch("bing")
-        self.file_operations = FileOperations(os.path.join(os.path.expanduser("~"), ".recycle_bin"))
+        self.file_operations = FileOperations(os.path.join(os.path.expanduser("~"), ".diskwise", "recycle_bin"))
         self.quick_search_engine = QuickSearchEngine()
         self.fulltext_search_engine = FullTextSearchEngine()
         self.content_extractor = ContentExtractor()
         self._search_timer = None
         self._build_ui()
         self._apply_language()
+        self._update_home_disks()
         self._navigate_to(self.current_path, add_history=False)
         self._update_disk_usage()
         # 启动时自动重建索引
@@ -233,9 +459,21 @@ class DiskMonitor(QMainWindow):
         self._language_combo.setToolTip(self._tr("language"))
         # 扫描结果标签页
         self._scan_result_tabs.setTabText(0, self._tr("large_files"))
-        self._scan_result_tabs.setTabText(1, self._tr("large_folders"))
-        self._scan_result_tabs.setTabText(2, self._tr("cleanup_advice"))
-        self._scan_result_tabs.setTabText(3, self._tr("junk_files"))
+        self._scan_result_tabs.setTabText(1, "📊 空间可视化" if self.language == "zh" else "📊 Space Map")
+        self._scan_result_tabs.setTabText(2, self._tr("large_folders"))
+        self._scan_result_tabs.setTabText(3, self._tr("cleanup_advice"))
+        self._scan_result_tabs.setTabText(4, self._tr("junk_files"))
+        # 回收站页面表头与工具栏
+        self._rb_tree.setHeaderLabels([
+            "", self._tr("rb_col_name"), self._tr("rb_col_origin"),
+            self._tr("rb_col_size"), self._tr("rb_col_deleted"), self._tr("rb_col_actions"),
+        ])
+        if hasattr(self, "_rb_btn_deselect"):
+            self._rb_btn_deselect.setText(
+                (self._tr("rb_select_all") + " ✗") if self.language == "zh" else "Deselect All")
+        if hasattr(self, "_home_greeting_sub"):
+            self._home_greeting_sub.setText(
+                self._tr("home_greeting_sub").replace("{time}", self._last_scan_time() or "—"))
         if self.language == "zh":
             self.tree.setHeaderLabels(["名称", "大小"])
             self._large_files.setHeaderLabels(["名称", "实际占用", "逻辑大小", "修改时间", "来源软件", "完整路径"])
@@ -268,43 +506,59 @@ class DiskMonitor(QMainWindow):
 
     def _build_ui(self):
         central = QWidget()
+        central.setObjectName("page")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        # ── 顶栏：logo + 标题 + 下划线式导航标签 + 搜索框 + 语言 ──
         toolbar = QFrame(); toolbar.setObjectName("toolbar")
-        tb = QHBoxLayout(toolbar); tb.setContentsMargins(18, 8, 18, 8); tb.setSpacing(9)
+        tb = QHBoxLayout(toolbar); tb.setContentsMargins(18, 0, 18, 0); tb.setSpacing(0)
         logo = QLabel()
-        if APP_ICON_PATH.is_file(): logo.setPixmap(QtGui.QIcon(str(APP_ICON_PATH)).pixmap(30, 30))
+        if APP_ICON_PATH.is_file(): logo.setPixmap(QtGui.QIcon(str(APP_ICON_PATH)).pixmap(26, 26))
         tb.addWidget(logo)
         title = self._register_text("app_name", QLabel()); title.setObjectName("title"); tb.addWidget(title)
-        tb.addSpacing(10)
-        
-        # 首页按钮
-        self._home_btn = QPushButton("首页")
-        self._home_btn.setIcon(self._icon(QtWidgets.QStyle.SP_ComputerIcon))
-        self._home_btn.setCursor(Qt.PointingHandCursor)
-        self._home_btn.clicked.connect(self._show_detail_view)
-        tb.addWidget(self._home_btn)
-        
-        self._scan_btn = self._register_text("space_scan", self._button("", QtWidgets.QStyle.SP_DriveHDIcon, self._show_scan_view))
-        self._search_toolbar_btn = self._register_text("quick_search", self._button("", QtWidgets.QStyle.SP_FileDialogContentsView, self._show_search_view))
-        recycle = self._register_text("recycle_bin", self._button("", QtWidgets.QStyle.SP_TrashIcon, self._open_recycle_bin))
-        tb.addWidget(self._scan_btn); tb.addWidget(self._search_toolbar_btn); tb.addWidget(recycle); tb.addStretch()
+        tb.addSpacing(16)
+
+        # 导航标签（首页 / 文件管理 / 磁盘空间扫描 / 快速搜索 / 回收站管理）
+        self._nav_tabs = []
+        nav_defs = [
+            ("nav_home", self._show_home_view),
+            ("nav_browse", self._show_browse_view),
+            ("nav_scan", self._show_scan_view),
+            ("nav_search", self._show_search_view),
+            ("nav_recycle", self._show_recycle_view),
+        ]
+        for key, slot in nav_defs:
+            btn = QPushButton()
+            btn.setObjectName("navTab")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(slot)
+            self._register_text(key, btn)
+            self._nav_tabs.append(btn)
+            tb.addWidget(btn)
+        tb.addStretch()
+
         self.search_box = QtWidgets.QLineEdit()
-        self.search_box.setMinimumWidth(240); self.search_box.textChanged.connect(self._on_search); tb.addWidget(self.search_box)
+        self.search_box.setMinimumWidth(220)
+        self.search_box.setPlaceholderText(self._tr("search"))
+        self.search_box.textChanged.connect(self._on_search)
+        tb.addWidget(self.search_box)
+        tb.addSpacing(12)
         self._language_label = self._register_text("language", QLabel())
         self._language_combo = QComboBox(); self._language_combo.addItems(["中文", "English"]); self._language_combo.setFixedWidth(94); self._language_combo.currentIndexChanged.connect(self._change_language)
         tb.addWidget(self._language_label); tb.addWidget(self._language_combo)
         root.addWidget(toolbar)
 
-        body = QHBoxLayout(); body.setContentsMargins(16, 16, 16, 12); body.setSpacing(16)
+        # ── 侧边栏（属于"文件管理"页面） ──
         sidebar = QFrame(); sidebar.setObjectName("sidebar"); sidebar.setMinimumWidth(260); sidebar.setMaximumWidth(320)
         side = QVBoxLayout(sidebar); side.setContentsMargins(12, 12, 12, 12); side.setSpacing(7)
         self._btn_back = self._button("返回上一位置", QtWidgets.QStyle.SP_ArrowBack, self._go_back_history)
         self._btn_up = self._button("返回上级目录", QtWidgets.QStyle.SP_ArrowUp, self._go_up)
         self._btn_root = self._button("返回磁盘根目录", QtWidgets.QStyle.SP_ComputerIcon, self._go_root)
+        for btn in (self._btn_back, self._btn_up, self._btn_root):
+            btn.setObjectName("navBack")
         self._register_text("back", self._btn_back); self._register_text("up", self._btn_up); self._register_text("root", self._btn_root)
         side.addWidget(self._btn_back); side.addWidget(self._btn_up); side.addWidget(self._btn_root)
         self._drive_combo = QComboBox(); self._drive_combo.setToolTip("选择磁盘")
@@ -316,32 +570,471 @@ class DiskMonitor(QMainWindow):
         header = self.tree.header(); header.setStretchLastSection(False); header.setSectionResizeMode(0, QHeaderView.Stretch); header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tree.itemClicked.connect(self._on_item_clicked); self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu); self.tree.customContextMenuRequested.connect(self._on_context_menu)
-        side.addWidget(self.tree, 1); body.addWidget(sidebar)
+        side.addWidget(self.tree, 1)
 
-        # 使用 QStackedWidget 替代 QTabWidget
-        self._main_stack = QtWidgets.QStackedWidget()
+        # ── 页面栈：0 首页 / 1 文件管理 / 2 磁盘空间扫描 / 3 快速搜索 / 4 回收站管理 ──
         self._detail_page = self._build_detail_page()
+        self._home_page = self._build_home_page()
         self._scan_page = self._build_scan_page()
         self._search_page = self._build_search_page()
-        self._main_stack.addWidget(self._detail_page)  # index 0
-        self._main_stack.addWidget(self._scan_page)    # index 1
-        self._main_stack.addWidget(self._search_page)  # index 2
-        self._main_stack.setCurrentIndex(0)  # 默认显示文件详情
-        body.addWidget(self._main_stack, 1)
-        
-        # 磁盘使用情况（底部横向条）
-        self._disk_bar_container = QFrame()
-        self._disk_bar_container.setObjectName("card")
-        self._disk_bar_container.setMaximumHeight(60)
-        disk_bar_layout = QHBoxLayout(self._disk_bar_container)
-        disk_bar_layout.setContentsMargins(18, 12, 18, 12)
-        disk_bar_layout.setSpacing(24)
-        self._disk_bars_layout = disk_bar_layout
-        root.addLayout(body, 1)
-        root.addWidget(self._disk_bar_container)
-        
-        self._status_label = QLabel("就绪"); self._status_label.setStyleSheet("padding:5px 20px;color:#65717d;background:#f7f9fb;border-top:1px solid #dfe3e8;")
-        root.addWidget(self._status_label)
+        self._recycle_page = self._build_recycle_page()
+
+        browse_container = QWidget()
+        browse_container.setObjectName("page")
+        browse_h = QHBoxLayout(browse_container)
+        browse_h.setContentsMargins(0, 0, 0, 0)
+        browse_h.setSpacing(16)
+        browse_h.addWidget(sidebar)
+        browse_h.addWidget(self._detail_page, 1)
+        self._browse_page = browse_container
+
+        self._main_stack = QtWidgets.QStackedWidget()
+        self._main_stack.addWidget(self._home_page)     # index 0
+        self._main_stack.addWidget(self._browse_page)   # index 1
+        self._main_stack.addWidget(self._scan_page)     # index 2
+        self._main_stack.addWidget(self._search_page)   # index 3
+        self._main_stack.addWidget(self._recycle_page)  # index 4
+        self._main_stack.setCurrentIndex(0)
+        self._set_active_tab(0)
+
+        body_wrap = QHBoxLayout()
+        body_wrap.setContentsMargins(16, 14, 16, 10)
+        body_wrap.addWidget(self._main_stack, 1)
+        root.addLayout(body_wrap, 1)
+
+        # ── 底部状态栏：状态文字 + 磁盘迷你进度条 ──
+        self._statusbar = QFrame()
+        self._statusbar.setObjectName("statusBar")
+        self._statusbar.setFixedHeight(34)
+        sb = QHBoxLayout(self._statusbar)
+        sb.setContentsMargins(20, 0, 20, 0)
+        self._status_label = QLabel(self._tr("status_ready"))
+        self._status_label.setStyleSheet(f"color:{M_TEXT_3}; font-size:11px;")
+        sb.addWidget(self._status_label)
+        sb.addStretch()
+        self._disk_bars_layout = QHBoxLayout()
+        self._disk_bars_layout.setSpacing(6)
+        sb.addLayout(self._disk_bars_layout)
+        root.addWidget(self._statusbar)
+
+    # ══════════════ 首页（Minimalism 预览图 01） ══════════════
+
+    def _build_home_page(self):
+        page = QWidget()
+        page.setObjectName("page")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(8, 8, 8, 0)
+        outer.setSpacing(24)
+
+        self._home_greeting = self._register_text("home_greeting", QLabel())
+        self._home_greeting.setObjectName("homeGreeting")
+        outer.addWidget(self._home_greeting)
+        self._home_greeting_sub = QLabel()
+        self._home_greeting_sub.setObjectName("homeGreetingSub")
+        outer.addWidget(self._home_greeting_sub)
+
+        self._home_disks_row = QHBoxLayout()
+        self._home_disks_row.setSpacing(18)
+        outer.addLayout(self._home_disks_row)
+
+        actions_title = self._register_text("home_quick_actions", QLabel())
+        actions_title.setStyleSheet(f"font-size:15px; font-weight:600; color:{M_TEXT};")
+        outer.addWidget(actions_title)
+
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(14)
+        for icon, title_key, sub_key, slot, bg, fg in [
+            ("📊", "space_scan", "home_action_scan_sub", self._show_scan_view, "#e8f4fd", M_ACCENT),
+            ("🔍", "quick_search", "home_action_search_sub", self._show_search_view, "#e8fdf0", M_GREEN),
+            ("🗑️", "recycle_bin", "home_action_recycle_sub", self._show_recycle_view, "#fde8e8", M_RED),
+        ]:
+            card = QPushButton()
+            card.setObjectName("actionCard")
+            card.setCursor(Qt.PointingHandCursor)
+            card.setMinimumHeight(86)
+            card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            card.clicked.connect(slot)
+            cl = QHBoxLayout(card)
+            cl.setContentsMargins(20, 18, 20, 18)
+            cl.setSpacing(14)
+            icon_lbl = QLabel(icon)
+            icon_lbl.setFixedSize(42, 42)
+            icon_lbl.setAlignment(Qt.AlignCenter)
+            icon_lbl.setStyleSheet(f"background:{bg}; color:{fg}; border-radius:10px; font-size:20px;")
+            cl.addWidget(icon_lbl)
+            txt = QVBoxLayout()
+            txt.setContentsMargins(0, 0, 0, 0)
+            txt.setSpacing(4)
+            t = self._register_text(title_key, QLabel())
+            t.setObjectName("actionTitle")
+            t.setFixedHeight(20)
+            s = self._register_text(sub_key, QLabel())
+            s.setObjectName("actionSub")
+            s.setFixedHeight(16)
+            txt.addWidget(t)
+            txt.addWidget(s)
+            cl.addLayout(txt, 1)
+            actions_row.addWidget(card)
+        outer.addLayout(actions_row)
+        outer.addStretch()
+        return page
+
+    def _disk_pct_color(self, percent):
+        if percent >= 90:
+            return M_RED
+        if percent >= 75:
+            return M_ORANGE
+        return M_ACCENT
+
+    def _update_home_disks(self):
+        """首页磁盘卡片（预览图 01 的磁盘卡片区）。"""
+        while self._home_disks_row.count():
+            item = self._home_disks_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        last_scan = self._last_scan_time()
+        self._home_greeting_sub.setText(
+            self._tr("home_greeting_sub").replace("{time}", last_scan or "—"))
+        system_drive = os.environ.get("SystemDrive", "C:").upper()
+        try:
+            for part in psutil.disk_partitions(all=False):
+                try:
+                    usage = psutil.disk_usage(part.mountpoint)
+                except OSError:
+                    continue
+                drive, _ = os.path.splitdrive(part.mountpoint)
+                letter = drive.upper() if drive else part.mountpoint.rstrip("\\/")
+                is_system = letter.upper().startswith(system_drive.rstrip(":"))
+                card = QFrame()
+                card.setObjectName("card")
+                v = QVBoxLayout(card)
+                v.setContentsMargins(22, 20, 22, 20)
+                v.setSpacing(12)
+                head = QHBoxLayout()
+                name = QLabel(
+                    f"{'💻' if is_system else '📦'}  {letter} {self._tr('home_system_drive' if is_system else 'home_data_drive')}")
+                name.setObjectName("diskName")
+                pct = QLabel(f"{usage.percent:.0f}%")
+                pct.setObjectName("diskPct")
+                color = self._disk_pct_color(usage.percent)
+                pct.setStyleSheet(f"color:{color};")
+                head.addWidget(name)
+                head.addStretch()
+                head.addWidget(pct)
+                v.addLayout(head)
+                bar = QProgressBar()
+                bar.setRange(0, 100)
+                bar.setValue(min(100, int(usage.percent)))
+                bar.setTextVisible(False)
+                bar.setFixedHeight(6)
+                bar.setStyleSheet(
+                    f"QProgressBar {{ border:0; background:{M_BORDER}; border-radius:3px; min-height:6px; max-height:6px; }}"
+                    f"QProgressBar::chunk {{ background:{color}; border-radius:3px; }}")
+                v.addWidget(bar)
+                detail = QHBoxLayout()
+                used_lbl = QLabel(self._tr("home_used").replace("{size}", format_size(usage.used)))
+                used_lbl.setObjectName("diskDetail")
+                total_lbl = QLabel(self._tr("home_total").replace("{size}", format_size(usage.total)))
+                total_lbl.setObjectName("diskDetail")
+                detail.addWidget(used_lbl)
+                detail.addStretch()
+                detail.addWidget(total_lbl)
+                v.addLayout(detail)
+                self._home_disks_row.addWidget(card)
+        except Exception:
+            pass
+
+    def _last_scan_time(self):
+        try:
+            p = Path.home() / ".diskwise" / "last_scan.txt"
+            if p.exists():
+                return p.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+        return ""
+
+    def _record_scan_time(self):
+        try:
+            p = Path.home() / ".diskwise" / "last_scan.txt"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(time.strftime("%Y年%m月%d日 %H:%M", time.localtime()), encoding="utf-8")
+        except OSError:
+            pass
+
+    # ══════════════ 回收站管理页面（Minimalism 预览图 04） ══════════════
+
+    def _build_recycle_page(self):
+        page = QWidget()
+        page.setObjectName("page")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(8, 8, 8, 0)
+        outer.setSpacing(16)
+
+        # 汇总卡片
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(14)
+        self._rb_summary_labels = {}
+        for key in ("rb_files_count", "rb_space_used", "rb_oldest", "rb_new_this_week"):
+            card = QFrame()
+            card.setObjectName("card")
+            v = QVBoxLayout(card)
+            v.setContentsMargins(20, 14, 20, 14)
+            v.setSpacing(6)
+            lbl = self._register_text(key, QLabel())
+            lbl.setObjectName("summaryLabel")
+            val = QLabel("—")
+            val.setObjectName("summaryValue")
+            v.addWidget(lbl)
+            v.addWidget(val)
+            self._rb_summary_labels[key] = val
+            summary_row.addWidget(card)
+        outer.addLayout(summary_row)
+
+        # 工具栏
+        toolbar_row = QHBoxLayout()
+        self._rb_select_all_cb = QtWidgets.QCheckBox()
+        self._rb_select_all_cb.stateChanged.connect(self._rb_toggle_select_all)
+        toolbar_row.addWidget(self._rb_select_all_cb)
+        self._rb_selected_label = QLabel("")
+        self._rb_selected_label.setStyleSheet(f"color:{M_TEXT_2}; font-size:12px;")
+        toolbar_row.addWidget(self._rb_selected_label)
+        toolbar_row.addStretch()
+        btn_select_all = QPushButton(); self._register_text("rb_select_all", btn_select_all)
+        btn_select_all.clicked.connect(lambda: self._rb_set_all(True))
+        btn_deselect = QPushButton(self._tr("rb_select_all") + " ✗")
+        btn_deselect.clicked.connect(lambda: self._rb_set_all(False))
+        self._rb_btn_deselect = btn_deselect
+        btn_del = QPushButton(); self._register_text("rb_delete_selected", btn_del)
+        btn_del.setObjectName("danger")
+        btn_del.clicked.connect(self._rb_delete_selected)
+        btn_restore = QPushButton(); self._register_text("rb_restore_selected", btn_restore)
+        btn_restore.setObjectName("primary")
+        btn_restore.clicked.connect(self._rb_restore_selected)
+        btn_empty = QPushButton(); self._register_text("rb_empty", btn_empty)
+        btn_empty.setObjectName("dangerSolid")
+        btn_empty.clicked.connect(self._rb_empty_bin)
+        for b in (btn_select_all, btn_deselect, btn_del, btn_restore, btn_empty):
+            toolbar_row.addWidget(b)
+        outer.addLayout(toolbar_row)
+
+        # 回收站表格
+        self._rb_tree = QTreeWidget()
+        self._rb_tree.setColumnCount(6)
+        self._rb_tree.setRootIsDecorated(False)
+        self._rb_tree.setAlternatingRowColors(True)
+        self._rb_tree.setUniformRowHeights(False)
+        self._rb_tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        h = self._rb_tree.header()
+        h.setStretchLastSection(False)
+        h.setSectionResizeMode(QHeaderView.Interactive)
+        self._rb_tree.setColumnWidth(0, 36)
+        self._rb_tree.setColumnWidth(1, 320)
+        self._rb_tree.setColumnWidth(2, 300)
+        self._rb_tree.setColumnWidth(3, 90)
+        self._rb_tree.setColumnWidth(4, 140)
+        h.setSectionResizeMode(5, QHeaderView.Stretch)
+        outer.addWidget(self._rb_tree, 1)
+        return page
+
+    def _rb_load_items(self):
+        """读取回收站目录 + 元数据，填充表格和汇总卡片。"""
+        self._rb_tree.clear()
+        recycle_path = self.file_operations.recycle_bin_path
+        entries = []
+        if os.path.isdir(recycle_path):
+            for name in sorted(os.listdir(recycle_path)):
+                if name.endswith(".meta.json"):
+                    continue
+                full = os.path.join(recycle_path, name)
+                try:
+                    if os.path.isdir(full):
+                        size = self._folder_size(full)
+                    else:
+                        size = os.path.getsize(full)
+                    mtime = os.path.getmtime(full)
+                except OSError:
+                    continue
+                origin = ""
+                deleted_at = mtime
+                meta_path = full + ".meta.json"
+                if os.path.isfile(meta_path):
+                    try:
+                        with open(meta_path, "r", encoding="utf-8") as fh:
+                            meta = json.load(fh)
+                        origin = meta.get("origin_path", "")
+                        deleted_at = float(meta.get("deleted_at", mtime))
+                    except (OSError, ValueError):
+                        pass
+                entries.append({
+                    "name": name, "path": full, "origin": origin,
+                    "size": size, "mtime": mtime, "deleted_at": deleted_at,
+                })
+
+        now = time.time()
+        total_size = sum(e["size"] for e in entries)
+        oldest_days = int((now - min((e["deleted_at"] for e in entries), default=now)) / 86400) if entries else 0
+        new_week = sum(1 for e in entries if now - e["deleted_at"] <= 7 * 86400)
+        self._rb_summary_labels["rb_files_count"].setText(f"{len(entries):,}")
+        self._rb_summary_labels["rb_space_used"].setText(format_size(total_size))
+        self._rb_summary_labels["rb_oldest"].setText(
+            self._tr("rb_days_ago").replace("{n}", str(oldest_days)) if entries else "—")
+        self._rb_summary_labels["rb_new_this_week"].setText(str(new_week))
+        self._rb_summary_labels["rb_new_this_week"].setStyleSheet(
+            f"font-size:24px; font-weight:700; color:{M_RED if new_week else M_TEXT};")
+
+        for e in entries:
+            item = QTreeWidgetItem(["", e["name"], e["origin"] or "—",
+                                    format_size(e["size"]), format_time(e["deleted_at"]), ""])
+            item.setData(0, Qt.UserRole, e["path"])
+            item.setData(1, Qt.UserRole, e["origin"])
+            item.setToolTip(2, e["origin"] or "")
+            self._rb_tree.addTopLevelItem(item)
+
+            cb = QtWidgets.QCheckBox()
+            cb.stateChanged.connect(lambda *_: self._rb_update_selected_label())
+            self._rb_tree.setItemWidget(item, 0, cb)
+
+            actions = QWidget()
+            al = QHBoxLayout(actions)
+            al.setContentsMargins(4, 2, 4, 2)
+            al.setSpacing(6)
+            restore_btn = QPushButton(self._tr("rb_restore"))
+            restore_btn.setObjectName("success")
+            restore_btn.setFixedHeight(26)
+            restore_btn.clicked.connect(lambda *_u, it=item: self._rb_restore_one(it))
+            delete_btn = QPushButton(self._tr("rb_permanent"))
+            delete_btn.setObjectName("danger")
+            delete_btn.setFixedHeight(26)
+            delete_btn.clicked.connect(lambda *_u, it=item: self._rb_delete_one(it))
+            al.addWidget(restore_btn)
+            al.addWidget(delete_btn)
+            al.addStretch()
+            self._rb_tree.setItemWidget(item, 5, actions)
+
+        self._rb_select_all_cb.blockSignals(True)
+        self._rb_select_all_cb.setChecked(False)
+        self._rb_select_all_cb.blockSignals(False)
+        self._rb_update_selected_label()
+
+    def _rb_checkbox(self, item):
+        w = self._rb_tree.itemWidget(item, 0)
+        return w if isinstance(w, QtWidgets.QCheckBox) else None
+
+    def _rb_checked_items(self):
+        return [self._rb_tree.topLevelItem(i) for i in range(self._rb_tree.topLevelItemCount())
+                if (cb := self._rb_checkbox(self._rb_tree.topLevelItem(i))) and cb.isChecked()]
+
+    def _rb_update_selected_label(self):
+        n = len(self._rb_checked_items())
+        self._rb_selected_label.setText(self._tr("rb_selected_n").replace("{n}", str(n)))
+
+    def _rb_toggle_select_all(self, state):
+        self._rb_set_all(state == Qt.Checked)
+
+    def _rb_set_all(self, checked):
+        for i in range(self._rb_tree.topLevelItemCount()):
+            cb = self._rb_checkbox(self._rb_tree.topLevelItem(i))
+            if cb:
+                cb.blockSignals(True)
+                cb.setChecked(checked)
+                cb.blockSignals(False)
+        self._rb_update_selected_label()
+
+    def _rb_restore_one(self, item):
+        path = item.data(0, Qt.UserRole)
+        origin = item.data(1, Qt.UserRole) or ""
+        if not path or not os.path.lexists(path):
+            QMessageBox.warning(self, "恢复失败", "该项目已不存在。")
+            return
+        name = os.path.basename(path.rstrip(os.sep))
+        if origin:
+            target_dir = os.path.dirname(origin)
+            target = origin
+        else:
+            target_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+            target = os.path.join(target_dir, name)
+        if os.path.exists(target) and QMessageBox.question(
+                self, "恢复确认", f"目标位置已存在同名文件：\n{target}\n\n覆盖它吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        ok, msg = self.file_ops.restore_from_recycle_bin(path, target)
+        if ok:
+            # 清理元数据文件
+            try:
+                os.remove(path + ".meta.json")
+            except OSError:
+                pass
+            self._rb_load_items()
+        else:
+            QMessageBox.critical(self, "恢复失败", msg)
+
+    def _rb_restore_selected(self):
+        items = self._rb_checked_items()
+        if not items:
+            QMessageBox.information(self, "提示", "请先勾选要恢复的项目")
+            return
+        for item in items:
+            self._rb_restore_one(item)
+
+    def _rb_delete_one(self, item):
+        path = item.data(0, Qt.UserRole)
+        if not path:
+            return
+        name = os.path.basename(path.rstrip(os.sep))
+        if QMessageBox.question(
+                self, "确认永久删除",
+                f"永久删除后无法恢复：\n{name}\n\n确定继续吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            try:
+                os.remove(path + ".meta.json")
+            except OSError:
+                pass
+            self._rb_load_items()
+        except Exception as exc:
+            QMessageBox.critical(self, "删除失败", str(exc))
+
+    def _rb_delete_selected(self):
+        items = self._rb_checked_items()
+        if not items:
+            QMessageBox.information(self, "提示", "请先勾选要删除的项目")
+            return
+        if QMessageBox.question(
+                self, "确认永久删除",
+                f"将永久删除选中的 {len(items)} 个项目，此操作不可恢复。\n\n确定继续吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        for item in items:
+            path = item.data(0, Qt.UserRole)
+            try:
+                if path and os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path)
+                elif path:
+                    os.remove(path)
+                try:
+                    os.remove(path + ".meta.json")
+                except OSError:
+                    pass
+            except Exception:
+                continue
+        self._rb_load_items()
+
+    def _rb_empty_bin(self):
+        if self._rb_tree.topLevelItemCount() == 0:
+            QMessageBox.information(self, "提示", self._tr("rb_empty_bin"))
+            return
+        if QMessageBox.question(
+                self, "清空回收站", "确定清空回收站中的全部项目吗？\n此操作不可恢复。",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        ok, msg = self.file_ops.empty_recycle_bin()
+        (QMessageBox.information if ok else QMessageBox.critical)(self, "清空回收站", msg)
+        self._rb_load_items()
 
     def _build_detail_page(self):
         """构建文件详情页面（左侧元数据 + 右侧预览）"""
@@ -444,7 +1137,56 @@ class DiskMonitor(QMainWindow):
         self._suggestions = self._result_tree(["建议等级", "名称", "可释放空间", "原因", "风险", "完整路径"])
         self._garbage_files = self._result_tree(["类别", "名称", "实际占用", "修改时间", "建议", "风险", "完整路径"])
         self._scan_result_tabs = results
-        results.addTab(self._large_files, ""); results.addTab(self._large_folders, ""); results.addTab(self._suggestions, ""); results.addTab(self._garbage_files, "")
+        
+        # 创建 Treemap 可视化页面
+        treemap_page = QWidget()
+        treemap_layout = QVBoxLayout(treemap_page)
+        treemap_layout.setContentsMargins(0, 0, 0, 0)
+        treemap_layout.setSpacing(8)
+        
+        # 面包屑导航栏
+        breadcrumb_bar = QHBoxLayout()
+        self._treemap_back_btn = QPushButton("⬆ 返回上级")
+        self._treemap_back_btn.setEnabled(False)
+        self._treemap_back_btn.clicked.connect(self._treemap_go_back)
+        breadcrumb_bar.addWidget(self._treemap_back_btn)
+        
+        self._treemap_breadcrumb = QLabel("📁 根目录")
+        self._treemap_breadcrumb.setStyleSheet("font-weight: 500; color: #333;")
+        breadcrumb_bar.addWidget(self._treemap_breadcrumb)
+        breadcrumb_bar.addStretch()
+        treemap_layout.addLayout(breadcrumb_bar)
+        
+        # Treemap 组件（直接填满视口，不滚动）
+        self._treemap_widget = TreemapWidget()
+        treemap_layout.addWidget(self._treemap_widget, 1)
+        
+        # 图例栏（预览图 03 风格：浅灰圆角卡片内的彩色方块 + 标签）
+        legend_frame = QFrame()
+        legend_frame.setStyleSheet(
+            f"QFrame {{ background:{M_CARD_SOFT}; border-radius:8px; border:1px solid {M_BORDER}; }}")
+        legend_bar = QHBoxLayout(legend_frame)
+        legend_bar.setContentsMargins(14, 8, 14, 8)
+        legend_bar.setSpacing(16)
+        legend_title = QLabel("颜色说明：")
+        legend_title.setStyleSheet(f"color:{M_TEXT_2}; font-size:12px;")
+        legend_bar.addWidget(legend_title)
+        for _threshold, color, label in [(">10GB", "#B45078", "> 10 GB"),
+                                         ("1-10GB", "#4FACFE", "1–10 GB"),
+                                         ("100MB-1GB", "#43E97B", "100 MB–1 GB"),
+                                         ("10-100MB", "#FA709A", "10–100 MB"),
+                                         ("<10MB", "#A8EDEA", "< 10 MB")]:
+            swatch = QLabel()
+            swatch.setFixedSize(12, 12)
+            swatch.setStyleSheet(f"background:{color}; border-radius:3px;")
+            legend_bar.addWidget(swatch)
+            text_label = QLabel(label)
+            text_label.setStyleSheet(f"color:{M_TEXT}; font-size:11px;")
+            legend_bar.addWidget(text_label)
+        legend_bar.addStretch()
+        treemap_layout.addWidget(legend_frame)
+        
+        results.addTab(self._large_files, ""); results.addTab(treemap_page, "📊 空间可视化"); results.addTab(self._large_folders, ""); results.addTab(self._suggestions, ""); results.addTab(self._garbage_files, "")
         outer.addWidget(results, 1)
         actions = QHBoxLayout(); actions.addStretch()
         open_btn = self._register_text("open_location", QPushButton()); open_btn.clicked.connect(self._open_scan_result)
@@ -462,126 +1204,92 @@ class DiskMonitor(QMainWindow):
         tree.itemDoubleClicked.connect(lambda *_: self._open_scan_result()); return tree
 
     def _build_search_page(self):
-        """构建快速搜索页面（文件名搜索 + 内容搜索 + 预览）"""
+        """构建快速搜索页面（Minimalism 预览图 02：文件名/内容搜索 + 格式 chips + 预览）。"""
         page = QWidget()
+        page.setObjectName("page")
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(12)
+        outer.setContentsMargins(8, 8, 8, 0)
+        outer.setSpacing(14)
 
         # ── 搜索控制区 ──
         controls = QFrame(); controls.setObjectName("card")
-        c = QVBoxLayout(controls); c.setContentsMargins(18, 14, 18, 14)
+        c = QVBoxLayout(controls); c.setContentsMargins(20, 16, 20, 16); c.setSpacing(12)
 
-        # 搜索模式标签页（替代下拉菜单）
-        self._search_tabs = QTabWidget()
-        self._search_tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #d7dce2; border-radius: 6px; padding: 0; }
-            QTabBar::tab { padding: 8px 16px; margin-right: 4px; }
-            QTabBar::tab:selected { background: #4a90e2; color: white; border-radius: 4px; }
-        """)
-        
-        # 标签页1：文件名搜索
-        name_search_page = QWidget()
-        name_layout = QVBoxLayout(name_search_page)
-        name_layout.setContentsMargins(8, 8, 8, 8)
-        name_hint = QLabel("按文件名搜索，支持通配符 * 和 ?")
-        name_hint.setStyleSheet("color:#73808c; font-size:12px;")
-        name_layout.addWidget(name_hint)
-        name_layout.addStretch()
-        self._search_tabs.addTab(name_search_page, "📄 文件名搜索")
-        
-        # 标签页2：内容搜索
-        content_search_page = QWidget()
-        content_layout = QVBoxLayout(content_search_page)
-        content_layout.setContentsMargins(8, 8, 8, 8)
-        content_hint = QLabel("搜索文档内容（PDF、Word、Excel、PPT、TXT 等）")
-        content_hint.setStyleSheet("color:#73808c; font-size:12px;")
-        content_layout.addWidget(content_hint)
-        content_layout.addStretch()
-        self._search_tabs.addTab(content_search_page, "📖 内容搜索")
-        
-        # 标签页切换事件
+        # 搜索模式标签（下划线式）
+        self._search_tabs = SearchModeTabs(["📁 文件名搜索", "📄 内容搜索"])
         self._search_tabs.currentChanged.connect(self._on_search_tab_changed)
         c.addWidget(self._search_tabs)
 
-        # 搜索输入框（共享）
+        # 搜索框（图标 + 输入 + 清除按钮）
         search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+        icon_lbl = QLabel("🔍")
+        icon_lbl.setStyleSheet(f"color:{M_TEXT_3}; font-size:16px; padding:0 2px;")
+        search_row.addWidget(icon_lbl)
         self._search_input = QtWidgets.QLineEdit()
-        self._search_input.setPlaceholderText("输入关键词搜索...")
-        self._search_input.setMinimumHeight(36)
+        self._search_input.setPlaceholderText("输入关键词搜索文件...")
+        self._search_input.setMinimumHeight(38)
         self._search_input.textChanged.connect(self._on_search_query_changed)
         search_row.addWidget(self._search_input, 1)
-
-        self._search_btn = QPushButton("搜索")
-        self._search_btn.setMinimumHeight(36)
-        self._search_btn.setMinimumWidth(80)
-        self._search_btn.clicked.connect(self._do_search)
-        self._search_btn.setStyleSheet("QPushButton { background: #4a90e2; color: white; border: none; border-radius: 6px; font-weight: 600; } QPushButton:hover { background: #357abd; }")
-        search_row.addWidget(self._search_btn)
+        self._search_clear_btn = QPushButton("✕")
+        self._search_clear_btn.setFixedSize(30, 30)
+        self._search_clear_btn.setStyleSheet(f"QPushButton {{ border:none; color:{M_TEXT_3}; font-size:15px; background:transparent; }} QPushButton:hover {{ color:{M_TEXT_2}; }}")
+        self._search_clear_btn.clicked.connect(lambda: self._search_input.clear())
+        search_row.addWidget(self._search_clear_btn)
         c.addLayout(search_row)
 
-        # 过滤条件行
+        # 文件格式 chips
+        chip_row = QHBoxLayout()
+        chip_row.setSpacing(8)
+        self._format_chips = []
+        for text in ["全部格式", "文档", "图片", "视频", "压缩包"]:
+            chip = QPushButton(text)
+            chip.setObjectName("chip")
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.clicked.connect(lambda _=False, t=text: self._on_format_chip_clicked(t))
+            self._format_chips.append(chip)
+            chip_row.addWidget(chip)
+        self._active_format = "全部格式"
+        self._format_chips[0].setProperty("class", "active")
+        chip_row.addStretch()
+        c.addLayout(chip_row)
+
+        # 搜索范围 + 索引状态
         filter_row = QHBoxLayout()
-        
-        # 搜索范围
         filter_row.addWidget(QLabel("搜索范围："))
         self._search_scope_combo = QComboBox()
         self._search_scope_combo.addItems(["🌐 全局搜索", "📂 当前目录", "📂 选择目录..."])
         self._search_scope_combo.setFixedWidth(150)
         self._search_scope_combo.currentIndexChanged.connect(self._on_scope_changed)
         filter_row.addWidget(self._search_scope_combo)
-        
-        filter_row.addSpacing(20)
-        
-        # 文件格式
-        filter_row.addWidget(QLabel("文件格式："))
-        self._search_format_combo = QComboBox()
-        self._search_format_combo.addItems([
-            "全部格式",
-            "📄 文档 (PDF/Word/Excel/PPT)",
-            "🖼 图片 (JPG/PNG/GIF/BMP)",
-            "🎬 视频 (MP4/AVI/MKV)",
-            "🎵 音频 (MP3/WAV/FLAC)",
-            "📦 压缩包 (ZIP/RAR/7Z)",
-            "⚙️ 自定义扩展名..."
-        ])
-        self._search_format_combo.setFixedWidth(200)
-        self._search_format_combo.currentIndexChanged.connect(self._on_format_changed)
-        filter_row.addWidget(self._search_format_combo)
-        
-        filter_row.addStretch()
-        c.addLayout(filter_row)
+        filter_row.addSpacing(16)
 
-        # 索引状态行
-        index_row = QHBoxLayout()
+        index_dot = QLabel()
+        index_dot.setObjectName("indexDot")
+        self._index_dot = index_dot
+        filter_row.addWidget(index_dot)
         self._index_status_label = QLabel(self._tr("index_none"))
-        self._index_status_label.setStyleSheet("color:#52606d; font-size:12px;")
-        index_row.addWidget(self._index_status_label, 1)
+        self._index_status_label.setStyleSheet(f"color:{M_GREEN}; font-size:12px;")
+        filter_row.addWidget(self._index_status_label)
+        filter_row.addStretch()
 
-        # 刷新索引按钮（增量更新）
         self._refresh_index_btn = QPushButton("🔄 刷新索引")
-        self._refresh_index_btn.setFixedHeight(30)
+        self._refresh_index_btn.setFixedHeight(28)
         self._refresh_index_btn.clicked.connect(self._refresh_index)
         self._refresh_index_btn.setEnabled(False)
-        index_row.addWidget(self._refresh_index_btn)
-
-        # 重建索引按钮（强制重建）
+        filter_row.addWidget(self._refresh_index_btn)
         self._rebuild_index_btn = QPushButton("🔨 重建索引")
-        self._rebuild_index_btn.setFixedHeight(30)
+        self._rebuild_index_btn.setFixedHeight(28)
         self._rebuild_index_btn.clicked.connect(self._rebuild_index)
         self._rebuild_index_btn.setEnabled(False)
-        self._rebuild_index_btn.setStyleSheet("QPushButton { color: #e67e22; border: 1px solid #e67e22; } QPushButton:hover { background: #fef5ec; }")
-        index_row.addWidget(self._rebuild_index_btn)
-
-        # 取消索引按钮
+        self._rebuild_index_btn.setStyleSheet(f"QPushButton {{ color:{M_ORANGE}; border:1px solid {M_ORANGE}; }} QPushButton:hover {{ background:#fef5ec; }}")
+        filter_row.addWidget(self._rebuild_index_btn)
         self._cancel_index_btn = self._register_text("index_cancel", self._button("", QtWidgets.QStyle.SP_DialogCancelButton, self._cancel_index))
-        self._cancel_index_btn.setFixedHeight(30)
+        self._cancel_index_btn.setFixedHeight(28)
         self._cancel_index_btn.setEnabled(False)
-        index_row.addWidget(self._cancel_index_btn)
+        filter_row.addWidget(self._cancel_index_btn)
+        c.addLayout(filter_row)
 
-        c.addLayout(index_row)
-
-        # 进度条
         self._search_progress = QProgressBar()
         self._search_progress.setRange(0, 1)
         self._search_progress.setValue(0)
@@ -593,22 +1301,17 @@ class DiskMonitor(QMainWindow):
         # ── 搜索结果 + 预览（左右分栏） ──
         split = QtWidgets.QSplitter(Qt.Horizontal)
 
-        # 左侧：结果列表
         left = QFrame(); left.setObjectName("card")
-        left_layout = QVBoxLayout(left); left_layout.setContentsMargins(12, 12, 12, 12)
-
+        left_layout = QVBoxLayout(left); left_layout.setContentsMargins(14, 12, 14, 12)
         self._search_result_count = QLabel("")
-        self._search_result_count.setStyleSheet("color:#52606d; font-size:12px; padding-bottom:4px;")
+        self._search_result_count.setStyleSheet(f"color:{M_TEXT_3}; font-size:12px; padding-bottom:4px;")
         left_layout.addWidget(self._search_result_count)
-
         self._search_result_tree = QTreeWidget()
         self._search_result_tree.setHeaderLabels([self._tr("name"), self._tr("size"), self._tr("mtime"), self._tr("full_path")])
         self._search_result_tree.setAlternatingRowColors(True)
         self._search_result_tree.setTextElideMode(Qt.ElideMiddle)
-        # 设置列宽可调整
         self._search_result_tree.header().setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
         self._search_result_tree.header().setStretchLastSection(True)
-        # 启用点击列头排序
         self._search_result_tree.setSortingEnabled(True)
         self._search_result_tree.header().setSortIndicatorShown(True)
         self._search_result_tree.itemClicked.connect(self._on_search_result_clicked)
@@ -616,30 +1319,94 @@ class DiskMonitor(QMainWindow):
         self._search_result_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._search_result_tree.customContextMenuRequested.connect(self._on_search_result_context_menu)
         left_layout.addWidget(self._search_result_tree, 1)
-
         split.addWidget(left)
 
-        # 右侧：预览面板
         right = QFrame(); right.setObjectName("card")
-        right.setMinimumWidth(320)
-        right_layout = QVBoxLayout(right); right_layout.setContentsMargins(12, 12, 12, 12)
-
+        right.setMinimumWidth(300)
+        right_layout = QVBoxLayout(right); right_layout.setContentsMargins(16, 14, 16, 14)
         preview_title = self._register_text("preview_title", QLabel())
         preview_title.setObjectName("sectionTitle")
         right_layout.addWidget(preview_title)
-
         self._preview_text = QtWidgets.QTextEdit()
         self._preview_text.setReadOnly(True)
-        self._preview_text.setStyleSheet("QTextEdit { background:#fafbfc; border:1px solid #e1e5ea; border-radius:6px; font-family:Consolas,'Microsoft YaHei',monospace; font-size:13px; }")
         self._preview_text.setPlaceholderText(self._tr("preview_hint"))
         right_layout.addWidget(self._preview_text, 1)
-
+        # 预览面板操作按钮
+        pa = QVBoxLayout(); pa.setSpacing(8)
+        btn_open = QPushButton("📂 打开所在目录")
+        btn_open.setObjectName("primary")
+        btn_open.clicked.connect(self._preview_open_location)
+        btn_copy = QPushButton("📋 复制路径")
+        btn_copy.clicked.connect(self._preview_copy_path)
+        btn_del = QPushButton("🗑️ 移至回收站")
+        btn_del.setObjectName("danger")
+        btn_del.clicked.connect(self._preview_delete)
+        for b in (btn_open, btn_copy, btn_del):
+            pa.addWidget(b)
+        right_layout.addLayout(pa)
         split.addWidget(right)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
-
         outer.addWidget(split, 1)
         return page
+
+    def _on_format_chip_clicked(self, text):
+        """格式 chip 点击：更新激活状态并重新搜索。"""
+        self._active_format = text
+        for chip in self._format_chips:
+            active = chip.text() == text
+            chip.setProperty("class", "active" if active else "")
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
+        if self._search_input.text().strip():
+            self._do_search()
+
+    def _get_search_filters(self):
+        """获取当前搜索过滤条件。"""
+        scope_index = self._search_scope_combo.currentIndex()
+        path_filter = ""
+        if scope_index == 1:
+            path_filter = self.current_path
+        elif scope_index == 2:
+            text = self._search_scope_combo.itemText(2)
+            if text.startswith("📂 "):
+                path_filter = text[2:]
+        ext_map = {
+            "文档": ".pdf,.docx,.xlsx,.pptx,.txt",
+            "图片": ".jpg,.jpeg,.png,.gif,.bmp,.webp",
+            "视频": ".mp4,.avi,.mkv,.mov,.wmv",
+            "压缩包": ".zip,.rar,.7z,.tar,.gz",
+        }
+        ext_filter = ext_map.get(self._active_format, "")
+        return path_filter, ext_filter
+
+    def _preview_selected_path(self):
+        items = self._search_result_tree.selectedItems()
+        return items[0].data(0, Qt.UserRole) if items else None
+
+    def _preview_open_location(self):
+        path = self._preview_selected_path()
+        if path:
+            try:
+                os.startfile(path if os.path.isdir(path) else os.path.dirname(path))
+            except OSError as exc:
+                QMessageBox.warning(self, "打开失败", str(exc))
+        else:
+            QMessageBox.information(self, "提示", "请先选择一条搜索结果")
+
+    def _preview_copy_path(self):
+        path = self._preview_selected_path()
+        if path:
+            QtWidgets.QApplication.clipboard().setText(path)
+        else:
+            QMessageBox.information(self, "提示", "请先选择一条搜索结果")
+
+    def _preview_delete(self):
+        path = self._preview_selected_path()
+        if path:
+            self._delete_path(path)
+        else:
+            QMessageBox.information(self, "提示", "请先选择一条搜索结果")
 
     def _show_search_tab(self):
         """兼容旧引用"""
@@ -670,50 +1437,6 @@ class DiskMonitor(QMainWindow):
         # 范围变化后重新搜索
         if self._search_input.text().strip():
             self._do_search()
-
-    def _on_format_changed(self, index):
-        """文件格式变化"""
-        if index == 6:  # 自定义扩展名
-            ext, ok = QInputDialog.getText(self, "自定义扩展名", "请输入扩展名（如 .pdf,.docx）:")
-            if ok and ext:
-                self._search_format_combo.setItemText(6, f"⚙️ {ext}")
-            else:
-                self._search_format_combo.setCurrentIndex(0)
-        # 格式变化后重新搜索
-        if self._search_input.text().strip():
-            self._do_search()
-
-    def _get_search_filters(self):
-        """获取当前搜索过滤条件"""
-        # 搜索范围
-        scope_index = self._search_scope_combo.currentIndex()
-        path_filter = ""
-        if scope_index == 1:  # 当前目录
-            path_filter = self.current_path
-        elif scope_index == 2:  # 选择的目录
-            text = self._search_scope_combo.itemText(2)
-            if text.startswith("📂 "):
-                path_filter = text[2:]
-        
-        # 文件格式
-        format_index = self._search_format_combo.currentIndex()
-        ext_filter = ""
-        if format_index == 1:  # 文档
-            ext_filter = ".pdf,.docx,.xlsx,.pptx,.txt"
-        elif format_index == 2:  # 图片
-            ext_filter = ".jpg,.jpeg,.png,.gif,.bmp,.webp"
-        elif format_index == 3:  # 视频
-            ext_filter = ".mp4,.avi,.mkv,.mov,.wmv"
-        elif format_index == 4:  # 音频
-            ext_filter = ".mp3,.wav,.flac,.aac,.ogg"
-        elif format_index == 5:  # 压缩包
-            ext_filter = ".zip,.rar,.7z,.tar,.gz"
-        elif format_index == 6:  # 自定义
-            text = self._search_format_combo.itemText(6)
-            if text.startswith("⚙️ "):
-                ext_filter = text[3:]
-        
-        return path_filter, ext_filter
 
     def _on_search_query_changed(self, text):
         """输入变化时启动防抖定时器（300ms）"""
@@ -1312,7 +2035,16 @@ class DiskMonitor(QMainWindow):
     def _delete_path(self, path):
         if not path: return False
         if QMessageBox.question(self, "确认移至回收站", f"确定要移动以下项目吗？\n\n{path}", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes: return False
+        
+        # 先尝试普通方式
         ok, message = self.file_operations.move_to_recycle_bin(path)
+        
+        # 权限不足时使用 Windows Shell API（会弹出 UAC 授权，无需重启）
+        if not ok and "没有权限" in message:
+            ok = self._windows_shell_delete(path, allow_undo=True)
+            if ok:
+                message = "已成功移至回收站"
+        
         (QMessageBox.information if ok else QMessageBox.warning)(self, "操作结果", message)
         if ok: self.refresh_folder()
         return ok
@@ -1333,8 +2065,64 @@ class DiskMonitor(QMainWindow):
                 os.remove(path)
             QMessageBox.information(self, "永久删除", "所选项目已永久删除。")
             return True
+        except PermissionError:
+            # 使用 Windows Shell API 直接删除（会弹出 UAC 授权，无需重启）
+            ok = self._windows_shell_delete(path, allow_undo=False)
+            if ok:
+                QMessageBox.information(self, "永久删除", "所选项目已永久删除。")
+            return ok
         except Exception as exc:
             QMessageBox.critical(self, "永久删除失败", str(exc))
+            return False
+
+    def _windows_shell_delete(self, path, allow_undo=True):
+        """使用 Windows SHFileOperationW 删除文件/文件夹。
+        该 API 会自动弹出 UAC 权限提示（如果权限不足），用户点"是"即可，无需重启程序。
+        allow_undo=True 表示移入回收站，False 表示永久删除。
+        """
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            FO_DELETE = 3
+            FOF_ALLOWUNDO = 0x0040      # 允许撤消（移入回收站）
+            FOF_NOCONFIRMATION = 0x0010 # 不弹确认对话框（我们已弹过）
+            FOF_NOERRORUI = 0x0400      # 不显示错误 UI
+            FOF_SILENT = 0x0004         # 不显示进度
+            
+            class SHFILEOPSTRUCTW(ctypes.Structure):
+                _fields_ = [
+                    ("hwnd", wintypes.HWND),
+                    ("wFunc", wintypes.UINT),
+                    ("pFrom", wintypes.LPCWSTR),
+                    ("pTo", wintypes.LPCWSTR),
+                    ("fFlags", wintypes.USHORT),
+                    ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", wintypes.LPVOID),
+                    ("lpszProgressTitle", wintypes.LPCWSTR),
+                ]
+            
+            flags = FOF_NOCONFIRMATION
+            if allow_undo:
+                flags |= FOF_ALLOWUNDO
+            
+            # pFrom 必须以双 NULL 结尾
+            pFrom = ctypes.create_unicode_buffer(path + '\0\0')
+            
+            shf = SHFILEOPSTRUCTW()
+            shf.hwnd = int(self.winId())
+            shf.wFunc = FO_DELETE
+            shf.pFrom = ctypes.cast(pFrom, wintypes.LPCWSTR)
+            shf.pTo = None
+            shf.fFlags = flags
+            shf.fAnyOperationsAborted = False
+            shf.hNameMappings = None
+            shf.lpszProgressTitle = None
+            
+            result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(shf))
+            return result == 0 and not shf.fAnyOperationsAborted
+        except Exception as e:
+            QMessageBox.warning(self, "操作失败", f"Shell 删除失败: {e}")
             return False
 
     def _delete_selected(self): self._delete_path(self._selected_path())
@@ -1362,79 +2150,92 @@ class DiskMonitor(QMainWindow):
         for i in range(self.tree.topLevelItemCount()): self.tree.topLevelItem(i).setHidden(bool(text and text not in self.tree.topLevelItem(i).text(0).lower()))
 
     def _update_disk_usage(self):
-        """更新磁盘使用情况（底部横向条）"""
-        # 清除旧的磁盘条
+        """更新底部状态栏的磁盘迷你条（预览图中的 mini-bar 风格）"""
         while self._disk_bars_layout.count():
             item = self._disk_bars_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        
-        first = True
-        for part in psutil.disk_partitions(all=False):
-            try:
-                usage = psutil.disk_usage(part.mountpoint)
-            except OSError:
-                continue
-            
-            if not first:
-                # 添加分隔线
-                divider = QFrame()
-                divider.setFrameShape(QFrame.VLine)
-                divider.setStyleSheet("color: #e1e5ea;")
-                divider.setMaximumHeight(24)
-                self._disk_bars_layout.addWidget(divider)
-            first = False
-            
-            # 磁盘标签
-            label_text = f"{part.mountpoint}  {format_size(usage.used)} / {format_size(usage.total)} ({usage.percent:.1f}%)"
-            label = QLabel(label_text)
-            label.setStyleSheet("font-size: 12px; color: #52606d; white-space: nowrap;")
-            label.setToolTip(label_text)
-            self._disk_bars_layout.addWidget(label)
-            
-            # 进度条
-            bar = QProgressBar()
-            bar.setRange(0, 1000)
-            bar.setValue(int(usage.percent * 10))
-            bar.setToolTip(label_text)
-            bar.setFixedWidth(120)
-            bar.setFixedHeight(10)
-            # 根据使用率设置颜色
-            if usage.percent >= 90:
-                bar.setStyleSheet("QProgressBar { border:0; background:#e9edf2; border-radius:5px; } QProgressBar::chunk { background:#e74c3c; border-radius:5px; }")
-            elif usage.percent >= 75:
-                bar.setStyleSheet("QProgressBar { border:0; background:#e9edf2; border-radius:5px; } QProgressBar::chunk { background:#e67e22; border-radius:5px; }")
-            self._disk_bars_layout.addWidget(bar)
+
+        try:
+            for part in psutil.disk_partitions(all=False):
+                try:
+                    usage = psutil.disk_usage(part.mountpoint)
+                except OSError:
+                    continue
+                drive, _ = os.path.splitdrive(part.mountpoint)
+                letter = drive.upper() if drive else part.mountpoint.rstrip("\\/")
+                tip = f"{letter}  {format_size(usage.used)} / {format_size(usage.total)} ({usage.percent:.1f}%)"
+
+                lbl = QLabel(letter)
+                lbl.setStyleSheet(f"font-size:11px; color:{M_TEXT_3};")
+                self._disk_bars_layout.addWidget(lbl)
+
+                bar = QProgressBar()
+                bar.setRange(0, 100)
+                bar.setValue(min(100, int(usage.percent)))
+                bar.setTextVisible(False)
+                bar.setFixedWidth(60)
+                bar.setFixedHeight(4)
+                color = self._disk_pct_color(usage.percent)
+                bar.setStyleSheet(
+                    f"QProgressBar {{ border:0; background:{M_BORDER}; border-radius:2px; min-height:4px; max-height:4px; }}"
+                    f"QProgressBar::chunk {{ background:{color}; border-radius:2px; }}")
+                bar.setToolTip(tip)
+                self._disk_bars_layout.addWidget(bar)
+
+                pct_lbl = QLabel(f"{usage.percent:.1f}%")
+                pct_lbl.setStyleSheet(f"font-size:11px; color:{M_TEXT_3};")
+                pct_lbl.setToolTip(tip)
+                self._disk_bars_layout.addWidget(pct_lbl)
+                self._disk_bars_layout.addSpacing(10)
+        except Exception:
+            pass
+
+    def _set_active_tab(self, index):
+        """高亮当前激活的导航标签"""
+        for i, btn in enumerate(self._nav_tabs):
+            btn.setProperty("class", "active" if i == index else "")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def _show_home_view(self):
+        """切换到首页"""
+        self._main_stack.setCurrentIndex(0)
+        self._set_active_tab(0)
+        self._update_home_disks()
+
+    def _show_browse_view(self):
+        """切换到文件管理视图"""
+        self._main_stack.setCurrentIndex(1)
+        self._set_active_tab(1)
 
     def _show_scan_view(self):
         """切换到磁盘空间扫描视图"""
-        self._main_stack.setCurrentIndex(1)
-        self._scan_use_current()
-        self._highlight_toolbar_button(self._scan_btn)
+        self._main_stack.setCurrentIndex(2)
+        self._set_active_tab(2)
+        if not getattr(self, "_scan_path_set", False):
+            self._scan_use_current()
+            self._scan_path_set = True
 
     def _show_search_view(self):
         """切换到快速搜索视图"""
-        self._main_stack.setCurrentIndex(2)
+        self._main_stack.setCurrentIndex(3)
+        self._set_active_tab(3)
         self._update_search_index_status()
         self._search_input.setFocus()
-        self._highlight_toolbar_button(self._search_toolbar_btn)
+
+    def _show_recycle_view(self):
+        """切换到回收站管理视图"""
+        self._main_stack.setCurrentIndex(4)
+        self._set_active_tab(4)
+        self._rb_load_items()
 
     def _show_detail_view(self):
-        """切换到文件详情视图"""
-        self._main_stack.setCurrentIndex(0)
-        self._highlight_toolbar_button(None)
-    
+        """兼容旧调用：跳转到文件管理视图"""
+        self._show_browse_view()
+
     def _highlight_toolbar_button(self, active_btn):
-        """高亮显示当前激活的工具栏按钮"""
-        # 重置所有按钮样式
-        for btn in [self._scan_btn, self._search_toolbar_btn]:
-            btn.setStyleSheet("")
-            btn.setProperty("class", "")
-        
-        # 高亮当前按钮
-        if active_btn:
-            active_btn.setStyleSheet("QPushButton { background-color: #4a90e2; color: white; border: 1px solid #4a90e2; }")
-            active_btn.setProperty("class", "active")
+        """兼容旧调用：已由 _set_active_tab 取代"""
 
     def _set_scan_path(self, path):
         self._scan_path = os.path.abspath(path); self._scan_path_label.setText(self._scan_path_label.fontMetrics().elidedText(self._scan_path, Qt.ElideMiddle, max(200, self._scan_path_label.width()-20))); self._scan_path_label.setToolTip(self._scan_path)
@@ -1462,13 +2263,117 @@ class DiskMonitor(QMainWindow):
 
     def _scan_status_update(self, path): self._scan_status.setText((f"Scanning: {path}" if self.language == "en" else f"正在扫描：{path}"))
 
+    def _treemap_go_back(self):
+        """Treemap 返回上一级"""
+        if hasattr(self, '_treemap_widget'):
+            self._treemap_widget.drill_up()
+
+    def _treemap_on_navigate(self, path: str, name: str, can_go_back: bool):
+        """Treemap 导航信号处理（下钻或返回时更新UI）"""
+        if hasattr(self, '_treemap_widget'):
+            self._treemap_back_btn.setEnabled(can_go_back)
+            self._treemap_breadcrumb.setText(f"📁 {name}")
+
+    def _treemap_context_menu(self, path, name, has_children, x, y):
+        """Treemap 右键菜单"""
+        from PyQt5.QtCore import QPoint
+        
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
+        
+        # 打开文件夹
+        open_action = menu.addAction("📂 打开文件夹")
+        open_action.triggered.connect(lambda: self._open_folder(path))
+        
+        # 文件夹属性
+        props_action = menu.addAction("ℹ️ 文件夹属性")
+        props_action.triggered.connect(lambda: self._show_folder_properties(path, name))
+        
+        # 复制路径
+        copy_action = menu.addAction("📋 复制路径")
+        copy_action.triggered.connect(lambda: self._copy_to_clipboard(path))
+        
+        menu.addSeparator()
+        
+        # 如果有子文件夹，添加下钻选项
+        if has_children:
+            drill_action = menu.addAction("🔍 查看子文件夹")
+            drill_action.triggered.connect(lambda: self._treemap_widget.drill_down_to_path(path))
+        
+        # 在鼠标位置显示菜单
+        menu.exec_(QPoint(x, y))
+
+    def _open_folder(self, path):
+        """在资源管理器中打开文件夹"""
+        try:
+            os.startfile(path)
+        except OSError as exc:
+            QMessageBox.warning(self, "打开失败", str(exc))
+
+    def _show_folder_properties(self, path, name):
+        """显示文件夹属性对话框"""
+        import os
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QDialogButtonBox
+        
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"文件夹属性 - {name}")
+        dlg.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(dlg)
+        
+        # 基本信息
+        layout.addWidget(QLabel(f"<b>名称:</b> {name}"))
+        layout.addWidget(QLabel(f"<b>路径:</b> {path}"))
+        
+        try:
+            stat = os.stat(path)
+            layout.addWidget(QLabel(f"<b>创建时间:</b> {time.ctime(stat.st_ctime)}"))
+            layout.addWidget(QLabel(f"<b>修改时间:</b> {time.ctime(stat.st_mtime)}"))
+        except OSError as e:
+            layout.addWidget(QLabel(f"<b>无法获取统计信息:</b> {e}"))
+        
+        layout.addSpacing(10)
+        
+        # 关闭按钮
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+        
+        dlg.exec_()
+
+    def _copy_to_clipboard(self, text):
+        """复制文本到剪贴板"""
+        QtWidgets.QApplication.clipboard().setText(text)
+        QMessageBox.information(self, "已复制", f"已复制到剪贴板:\n{text}", QMessageBox.Ok)
+
     def _scan_finished(self, result):
         self._scan_start.setEnabled(True); self._scan_cancel.setEnabled(False); self._scan_progress.setRange(0, 1); self._scan_progress.setValue(1)
+        self._record_scan_time()
         if result.get("cancelled"):
             self._scan_status.setText((f"Scan cancelled after {result['total_files']} files" if self.language == "en" else f"扫描已取消，已处理 {result['total_files']} 个文件")); return
+        
+        # 填充大文件列表
         for data in result["large_files"]:
             source = FileAssociation(data["path"]).get_detailed_identity().sync_software
             item = QTreeWidgetItem([data["name"], format_size(data["allocated"]), format_size(data["size"]), format_time(data["mtime"]), source, data["path"]]); item.setData(0, Qt.UserRole, data["path"]); self._large_files.addTopLevelItem(item)
+        
+        # 填充 Treemap 可视化
+        if "folder_tree" in result and hasattr(self, '_treemap_widget'):
+            self._treemap_widget.set_data(result["folder_tree"])
+            # 连接导航信号
+            try:
+                self._treemap_widget.navigate_signal.disconnect()
+            except:
+                pass
+            self._treemap_widget.navigate_signal.connect(self._treemap_on_navigate)
+            # 连接右键菜单信号
+            try:
+                self._treemap_widget.context_menu_signal.disconnect()
+            except:
+                pass
+            self._treemap_widget.context_menu_signal.connect(self._treemap_context_menu)
+        
+        # 填充大文件夹列表
         for data in result["large_folders"]:
             source = FileAssociation(data["path"]).get_detailed_identity().sync_software
             item = QTreeWidgetItem([data["name"], format_size(data["allocated"]), format_size(data["size"]), str(data["file_count"]), str(data["folder_count"]), source, data["path"]]); item.setData(0, Qt.UserRole, data["path"]); self._large_folders.addTopLevelItem(item)
@@ -1566,10 +2471,8 @@ class DiskMonitor(QMainWindow):
             QtWidgets.QApplication.clipboard().setText(path)
 
     def _open_recycle_bin(self):
-        try:
-            from recycle_bin_ui import RecycleBinDialog
-            RecycleBinDialog(self).exec_()
-        except Exception as exc: QMessageBox.warning(self, "回收站管理", str(exc))
+        """兼容旧调用：切换到回收站管理页面"""
+        self._show_recycle_view()
 
     def closeEvent(self, event):
         if self._scanner_thread and self._scanner_thread.isRunning(): self._scanner_thread.cancel(); self._scanner_thread.wait(2000)

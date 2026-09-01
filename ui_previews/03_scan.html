@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>DiskWise — 空间可视化 · Minimalism Preview</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; background:#f5f6f8; color:#2c3e50; }
+
+  .window {
+    width: 1100px; margin: 40px auto; background: #fff; border-radius: 14px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.08); overflow: hidden;
+  }
+
+  .titlebar {
+    height: 44px; background: linear-gradient(135deg, #e8edf2 0%, #f0f2f5 100%);
+    display: flex; align-items: center; padding: 0 18px; border-bottom: 1px solid #e2e6ea;
+  }
+  .titlebar .dots { display: flex; gap: 7px; }
+  .titlebar .dots span { width: 12px; height: 12px; border-radius: 50%; }
+  .titlebar .dots .r { background: #ff5f57; }
+  .titlebar .dots .y { background: #febc2e; }
+  .titlebar .dots .g { background: #28c840; }
+  .titlebar .title { flex:1; text-align:center; font-size:13px; color:#8e99a4; font-weight:500; }
+
+  .nav { display: flex; border-bottom: 1px solid #eef0f3; padding: 0 24px; background: #fafbfc; }
+  .nav-item { padding: 14px 22px; font-size: 14px; color: #8e99a4; cursor: pointer; border-bottom: 2.5px solid transparent; }
+  .nav-item:hover { color: #4a90d9; }
+  .nav-item.active { color: #4a90d9; border-bottom-color: #4a90d9; font-weight: 600; }
+
+  .content { padding: 16px 24px; }
+
+  /* Scan controls */
+  .scan-bar {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+    padding: 14px 18px; background: #f8f9fb; border-radius: 10px; border: 1px solid #eef0f3;
+  }
+  .scan-bar .path {
+    flex: 1; padding: 8px 14px; background: #fff; border: 1px solid #e2e6ea;
+    border-radius: 6px; font-size: 13px; color: #2c3e50;
+  }
+  .scan-btn {
+    padding: 9px 18px; border-radius: 8px; font-size: 13px; cursor: pointer;
+    border: none; font-weight: 500; transition: all 0.15s;
+  }
+  .scan-btn.primary { background: #4a90d9; color: #fff; }
+  .scan-btn.primary:hover { background: #3a7bc8; }
+  .scan-btn.secondary { background: #fff; color: #8e99a4; border: 1px solid #e2e6ea; }
+  .scan-btn.secondary:hover { background: #f8f9fb; }
+
+  /* Result tabs */
+  .result-tabs {
+    display: flex; gap: 0; margin-bottom: 14px; border-bottom: 1px solid #eef0f3;
+  }
+  .result-tab {
+    padding: 10px 18px; font-size: 13px; color: #8e99a4; cursor: pointer;
+    border-bottom: 2px solid transparent; transition: all 0.2s;
+  }
+  .result-tab.active { color: #4a90d9; border-bottom-color: #4a90d9; font-weight: 600; }
+
+  /* Breadcrumb */
+  .breadcrumb {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+  }
+  .breadcrumb-btn {
+    padding: 6px 14px; background: #f8f9fb; border: 1px solid #e2e6ea;
+    border-radius: 6px; font-size: 12px; color: #8e99a4; cursor: pointer;
+  }
+  .breadcrumb-btn:hover { background: #eef3ff; border-color: #b8d4f0; }
+  .breadcrumb-path { font-size: 13px; color: #2c3e50; font-weight: 500; }
+
+  /* Treemap */
+  .treemap-container {
+    height: 380px; background: #f8f9fb; border-radius: 10px; overflow: hidden;
+    border: 1px solid #eef0f3; position: relative; padding: 8px;
+  }
+  .treemap-grid {
+    display: grid; grid-template-columns: 3fr 2fr 1.5fr 1fr; grid-template-rows: 2fr 1fr;
+    gap: 3px; height: 100%;
+  }
+  .treemap-block {
+    border-radius: 4px; padding: 8px; cursor: pointer; transition: all 0.2s;
+    display: flex; flex-direction: column; justify-content: space-between;
+    position: relative; overflow: hidden;
+  }
+  .treemap-block:hover { opacity: 0.9; transform: scale(0.99); }
+  .treemap-block .name { font-size: 12px; font-weight: 600; line-height: 1.2; }
+  .treemap-block .size { font-size: 11px; opacity: 0.9; }
+  .treemap-block .meta { font-size: 10px; opacity: 0.7; }
+
+  /* Color coding */
+  .block-xl { background: linear-gradient(135deg, #b45078 0%, #c96590 100%); color: #fff; }
+  .block-lg { background: linear-gradient(135deg, #4facfe 0%, #6dbfff 100%); color: #fff; }
+  .block-md { background: linear-gradient(135deg, #43e97b 0%, #5ef090 100%); color: #1a2332; }
+  .block-sm { background: linear-gradient(135deg, #fa709a 0%, #ff8fab 100%); color: #fff; }
+  .block-xs { background: linear-gradient(135deg, #a8edea 0%, #c0f5f0 100%); color: #2c3e50; }
+
+  /* Specific blocks */
+  .windows-block { grid-row: 1 / 2; grid-column: 1 / 2; }
+  .programfiles-block { grid-row: 1 / 2; grid-column: 2 / 3; }
+  .programdata-block { grid-row: 1 / 2; grid-column: 3 / 4; }
+  .users-block { grid-row: 1 / 2; grid-column: 4 / 5; }
+  .pagefile-block { grid-row: 2 / 2; grid-column: 1 / 3; }
+  .hiberfil-block { grid-row: 2 / 2; grid-column: 3 / 5; }
+
+  /* Legend */
+  .legend {
+    display: flex; gap: 16px; padding: 10px 14px; background: #f8f9fb;
+    border-radius: 8px; margin-top: 12px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #2c3e50; }
+  .legend-color { width: 12px; height: 12px; border-radius: 3px; }
+  .legend-color.xl { background: #b45078; }
+  .legend-color.lg { background: #4facfe; }
+  .legend-color.md { background: #43e97b; }
+  .legend-color.sm { background: #fa709a; }
+  .legend-color.xs { background: #a8edea; }
+
+  /* Tooltip */
+  .tooltip {
+    position: absolute; top: 12px; right: 12px; background: #fff;
+    border: 1px solid #e2e6ea; border-radius: 8px; padding: 10px 14px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08); font-size: 11px; z-index: 10;
+    max-width: 200px;
+  }
+  .tooltip-title { font-weight: 600; color: #2c3e50; margin-bottom: 6px; }
+  .tooltip-row { color: #8e99a4; margin-bottom: 2px; }
+
+  .statusbar {
+    height: 32px; background: #f8f9fb; border-top: 1px solid #eef0f3;
+    display: flex; align-items: center; padding: 0 20px; font-size: 11px; color: #a0aab4;
+    justify-content: space-between;
+  }
+  .statusbar .status-disk { display: flex; align-items: center; gap: 6px; }
+  .statusbar .mini-bar { width: 60px; height: 4px; background: #eef0f3; border-radius: 2px; overflow: hidden; }
+  .statusbar .mini-fill { height: 100%; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="dots"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="title">磁盘智理 · DiskWise</div>
+    <div style="width:50px"></div>
+  </div>
+
+  <div class="nav">
+    <div class="nav-item">🏠 首页</div>
+    <div class="nav-item active">💾 磁盘空间扫描</div>
+    <div class="nav-item">🔍 快速搜索</div>
+    <div class="nav-item">🗑️ 回收站管理</div>
+  </div>
+
+  <div class="content">
+    <div class="scan-bar">
+      <input type="text" class="path" value="C:\" readonly>
+      <button class="scan-btn primary">▶ 开始扫描</button>
+      <button class="scan-btn secondary">选择目录</button>
+    </div>
+
+    <div class="result-tabs">
+      <div class="result-tab">📊 大文件</div>
+      <div class="result-tab active">📈 空间可视化</div>
+      <div class="result-tab">📁 大文件夹</div>
+      <div class="result-tab">💡 清理建议</div>
+      <div class="result-tab">🗑️ 垃圾文件</div>
+    </div>
+
+    <div class="breadcrumb">
+      <button class="breadcrumb-btn">⬆ 返回上级</button>
+      <span class="breadcrumb-path">📁 C:\</span>
+    </div>
+
+    <div class="treemap-container">
+      <div class="treemap-grid">
+        <div class="treemap-block block-xl windows-block">
+          <div class="name">Windows</div>
+          <div class="size">23.8 GB</div>
+          <div class="meta">121,313 个文件</div>
+        </div>
+        <div class="treemap-block block-lg programfiles-block">
+          <div class="name">Program Files (x86)</div>
+          <div class="size">8.0 GB</div>
+          <div class="meta">19,143 个文件</div>
+        </div>
+        <div class="treemap-block block-md programdata-block">
+          <div class="name">ProgramData</div>
+          <div class="size">3.7 GB</div>
+          <div class="meta">8,932 个文件</div>
+        </div>
+        <div class="treemap-block block-sm users-block">
+          <div class="name">Users</div>
+          <div class="size">2.1 GB</div>
+          <div class="meta">15,428 个文件</div>
+        </div>
+        <div class="treemap-block block-xs pagefile-block">
+          <div class="name">pagefile.sys</div>
+          <div class="size">1.0 GB</div>
+          <div class="meta">系统文件</div>
+        </div>
+        <div class="treemap-block block-xs hiberfil-block">
+          <div class="name">hiberfil.sys</div>
+          <div class="size">800 MB</div>
+          <div class="meta">系统文件</div>
+        </div>
+      </div>
+
+      <div class="tooltip">
+        <div class="tooltip-title">📁 Windows</div>
+        <div class="tooltip-row">大小：23.8 GB</div>
+        <div class="tooltip-row">文件：121,313 个</div>
+        <div class="tooltip-row">文件夹：44,347 个</div>
+        <div class="tooltip-row">路径：C:\Windows</div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><span class="legend-color xl"></span>&gt; 10 GB</div>
+      <div class="legend-item"><span class="legend-color lg"></span>1–10 GB</div>
+      <div class="legend-item"><span class="legend-color md"></span>100 MB–1 GB</div>
+      <div class="legend-item"><span class="legend-color sm"></span>10–100 MB</div>
+      <div class="legend-item"><span class="legend-color xs"></span>&lt; 10 MB</div>
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <div>扫描完成：522,963 个文件 · 110,779 个文件夹 · 实际占用 61.7 GB</div>
+    <div style="display:flex;gap:20px;">
+      <div class="status-disk">
+        <span>C:</span>
+        <div class="mini-bar"><div class="mini-fill" style="width:17%;background:#4a90d9"></div></div>
+        <span>17.4%</span>
+      </div>
+      <div class="status-disk">
+        <span>D:</span>
+        <div class="mini-bar"><div class="mini-fill" style="width:39%;background:#e67e22"></div></div>
+        <span>39.1%</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

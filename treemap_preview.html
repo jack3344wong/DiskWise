@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>大文件夹搜索 - SpaceSniffer 风格预览</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 24px;
+        }
+        
+        h1 {
+            font-size: 20px;
+            color: #333;
+            margin-bottom: 16px;
+        }
+        
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+            padding: 12px;
+            background: #f9f9f9;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .breadcrumb-item {
+            color: #0066cc;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        
+        .breadcrumb-item:hover {
+            color: #004499;
+        }
+        
+        .breadcrumb-separator {
+            color: #999;
+        }
+        
+        .breadcrumb-current {
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .treemap-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            min-height: 600px;
+            background: #fafafa;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 4px;
+        }
+        
+        .treemap-item {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            overflow: hidden;
+            padding: 8px;
+            text-align: center;
+        }
+        
+        .treemap-item:hover {
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 10;
+        }
+        
+        .treemap-item-name {
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            word-break: break-word;
+            margin-bottom: 4px;
+        }
+        
+        .treemap-item-size {
+            color: rgba(255,255,255,0.9);
+            font-size: 12px;
+        }
+        
+        .treemap-item-percentage {
+            color: rgba(255,255,255,0.8);
+            font-size: 11px;
+            margin-top: 2px;
+        }
+        
+        /* 不同大小级别的颜色 */
+        .size-xl { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .size-lg { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+        .size-md { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+        .size-sm { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); }
+        .size-xs { background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); }
+        
+        .info-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
+            padding: 12px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .legend {
+            display: flex;
+            gap: 16px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>大文件夹搜索 - SpaceSniffer 风格展示</h1>
+        
+        <div class="breadcrumb">
+            <span class="breadcrumb-item">磁盘扫描</span>
+            <span class="breadcrumb-separator">›</span>
+            <span class="breadcrumb-item">C:\</span>
+            <span class="breadcrumb-separator">›</span>
+            <span class="breadcrumb-current">Users</span>
+        </div>
+        
+        <div class="treemap-container" id="treemap">
+            <!-- 这里会动态生成方块 -->
+        </div>
+        
+        <div class="info-bar">
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color size-xl"></div>
+                    <span>> 10 GB</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color size-lg"></div>
+                    <span>1-10 GB</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color size-md"></div>
+                    <span>100 MB - 1 GB</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color size-sm"></div>
+                    <span>10-100 MB</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color size-xs"></div>
+                    <span>< 10 MB</span>
+                </div>
+            </div>
+            <div>
+                <span>总计: 156.8 GB | 显示: 前 20 个最大文件夹</span>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // 模拟数据
+        const mockData = [
+            { name: "Documents", size: 45.2, percentage: 28.8 },
+            { name: "Downloads", size: 32.7, percentage: 20.8 },
+            { name: "AppData", size: 28.5, percentage: 18.2 },
+            { name: "Desktop", size: 18.3, percentage: 11.7 },
+            { name: "Pictures", size: 12.1, percentage: 7.7 },
+            { name: "Videos", size: 8.9, percentage: 5.7 },
+            { name: "Music", size: 4.2, percentage: 2.7 },
+            { name: "OneDrive", size: 3.8, percentage: 2.4 },
+            { name: "Contacts", size: 0.5, percentage: 0.3 },
+            { name: "Favorites", size: 0.3, percentage: 0.2 },
+            { name: "Links", size: 0.2, percentage: 0.1 },
+            { name: "Searches", size: 0.1, percentage: 0.1 }
+        ];
+        
+        function getSizeClass(sizeGB) {
+            if (sizeGB >= 10) return 'size-xl';
+            if (sizeGB >= 1) return 'size-lg';
+            if (sizeGB >= 0.1) return 'size-md';
+            if (sizeGB >= 0.01) return 'size-sm';
+            return 'size-xs';
+        }
+        
+        function formatSize(sizeGB) {
+            if (sizeGB >= 1) {
+                return sizeGB.toFixed(1) + ' GB';
+            } else {
+                return (sizeGB * 1024).toFixed(0) + ' MB';
+            }
+        }
+        
+        function renderTreemap(data) {
+            const container = document.getElementById('treemap');
+            container.innerHTML = '';
+            
+            const totalWidth = container.offsetWidth - 8; // 减去 padding
+            const totalHeight = 600;
+            
+            // 简单的 treemap 布局算法（squarified）
+            // 这里用简化版本：按大小分配面积
+            data.forEach((item, index) => {
+                const area = (item.percentage / 100) * totalWidth * totalHeight;
+                const width = Math.sqrt(area * 1.5); // 稍微偏横向
+                const height = area / width;
+                
+                const div = document.createElement('div');
+                div.className = `treemap-item ${getSizeClass(item.size)}`;
+                div.style.width = Math.max(width, 80) + 'px';
+                div.style.height = Math.max(height, 60) + 'px';
+                div.style.flex = `0 0 ${Math.max(width, 80)}px`;
+                
+                div.innerHTML = `
+                    <div class="treemap-item-name">${item.name}</div>
+                    <div class="treemap-item-size">${formatSize(item.size)}</div>
+                    <div class="treemap-item-percentage">${item.percentage.toFixed(1)}%</div>
+                `;
+                
+                div.onclick = () => {
+                    alert(`点击进入: ${item.name}\n大小: ${formatSize(item.size)}\n\n这里会显示该文件夹的子目录`);
+                };
+                
+                container.appendChild(div);
+            });
+        }
+        
+        // 初始渲染
+        renderTreemap(mockData);
+        
+        // 窗口大小变化时重新渲染
+        window.addEventListener('resize', () => renderTreemap(mockData));
+    </script>
+</body>
+</html>
