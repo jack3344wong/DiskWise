@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""磁盘智理 / DiskWise 完整主窗口。"""
+"""文件管家 / FileCare 完整主窗口。"""
 from __future__ import annotations
 
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -30,10 +31,10 @@ from content_extractor import ContentExtractor
 from treemap_widget import TreemapWidget
 
 
-APP_NAME_ZH = "磁盘智理"
-APP_NAME_EN = "DiskWise"
+APP_NAME_ZH = "文件管家"
+APP_NAME_EN = "FileCare"
 ASSET_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)) / "assets"
-APP_ICON_PATH = ASSET_DIR / "diskwise.ico"
+APP_ICON_PATH = ASSET_DIR / "filecare.ico"
 
 
 class _TriangleSpinMixin:
@@ -117,10 +118,10 @@ class SearchModeTabs(QWidget):
 
 TRANSLATIONS = {
     "zh": {
-        "app_name": APP_NAME_ZH, "refresh": "刷新", "space_scan": "磁盘空间扫描", "recycle_bin": "回收站管理",
+        "app_name": APP_NAME_ZH, "refresh": "刷新", "space_scan": "大文件清理", "recycle_bin": "回收站管理",
         "home": "首页", "file_browse": "文件管理",
-        "nav_home": "🏠 首页", "nav_browse": "📂 文件管理", "nav_scan": "💾 磁盘空间扫描",
-        "nav_search": "🔍 快速搜索", "nav_recycle": "🗑️ 回收站管理",
+        "nav_home": "🏠 首页", "nav_browse": "📂 文件管理", "nav_scan": "🧹 大文件清理",
+        "nav_visualization": "📊 空间可视化", "nav_search": "🔍 快速搜索", "nav_recycle": "🗑️ 回收站管理",
         "search": "搜索当前目录...", "language": "语言", "language_zh": "中文", "language_en": "English", "back": "返回上一位置", "up": "返回上级目录", "root": "返回磁盘根目录",
         "file_details": "文件详情", "scan_tab": "空间扫描", "detail_title": "文件与软件详情", "disk_usage": "磁盘使用情况",
         "name": "名称", "full_path": "完整路径", "size": "大小", "mtime": "修改时间", "item_type": "项目类型",
@@ -130,6 +131,7 @@ TRANSLATIONS = {
         "choose_dir": "选择目录", "min_size": "最小文件大小(MB)", "max_results": "最多显示", "start_scan": "开始扫描",
         "cancel_scan": "取消扫描", "scan_intro": "选择范围后开始扫描；程序不会自动删除任何文件。请特别留意云盘同步风险。",
         "large_files": "大文件", "large_folders": "大文件夹", "cleanup_advice": "清理建议", "junk_files": "垃圾/临时文件", "clean_selected": "清理选中垃圾", "copy_path": "复制路径",
+        "visualization_title": "空间可视化", "visualization_intro": "显示目录下所有文件和文件夹的占用情况，点击色块可逐级下钻。",
         "quick_search": "快速搜索", "search_mode_name": "文件名搜索", "search_mode_content": "内容搜索",
         "search_placeholder": "输入关键词搜索...", "search_hint_name": "支持通配符 * 和 ?，如 *.pdf、report*、ext:xlsx",
         "search_hint_content": "搜索文档内容，支持 PDF、Word、Excel、PPT、TXT 等格式",
@@ -139,11 +141,13 @@ TRANSLATIONS = {
         "preview_title": "文档预览", "preview_hint": "点击搜索结果预览内容", "preview_no_support": "该文件类型不支持预览",
         "search_results": "搜索结果", "no_results": "未找到匹配结果", "result_count": "共 {count} 条结果",
         "open_file": "打开文件", "open_folder": "打开所在目录",
+        "open_item": "打开", "open_with": "选择打开方式…", "copy_item": "复制", "cut_item": "剪切",
         # ── 首页 ──
         "home_greeting": "你好，欢迎回来 👋",
         "home_greeting_sub": "上次扫描：{time} · 磁盘健康状态良好",
         "home_quick_actions": "快捷操作",
         "home_action_scan_sub": "分析大文件和文件夹占用",
+        "home_action_visualization_sub": "可视化查看空间占用分布",
         "home_action_search_sub": "按文件名或内容查找",
         "home_action_recycle_sub": "查看和清理已删除文件",
         "home_system_drive": "系统盘", "home_data_drive": "数据盘",
@@ -157,10 +161,10 @@ TRANSLATIONS = {
         "rb_days_ago": "{n} 天前", "rb_empty_bin": "回收站为空",
     },
     "en": {
-        "app_name": APP_NAME_EN, "refresh": "Refresh", "space_scan": "Disk Space Scan", "recycle_bin": "Recycle Bin",
+        "app_name": APP_NAME_EN, "refresh": "Refresh", "space_scan": "Large File Cleanup", "recycle_bin": "Recycle Bin",
         "home": "Home", "file_browse": "File Browser",
-        "nav_home": "🏠 Home", "nav_browse": "📂 Files", "nav_scan": "💾 Disk Space Scan",
-        "nav_search": "🔍 Quick Search", "nav_recycle": "🗑️ Recycle Bin",
+        "nav_home": "🏠 Home", "nav_browse": "📂 Files", "nav_scan": "🧹 Large File Cleanup",
+        "nav_visualization": "📊 Space Visualization", "nav_search": "🔍 Quick Search", "nav_recycle": "🗑️ Recycle Bin",
         "search": "Search current folder...", "language": "Language", "language_zh": "Chinese", "language_en": "English", "back": "Previous Location", "up": "Parent Folder", "root": "Drive Root",
         "file_details": "File Details", "scan_tab": "Space Scan", "detail_title": "File & Software Details", "disk_usage": "Disk Usage",
         "name": "Name", "full_path": "Full Path", "size": "Size", "mtime": "Modified", "item_type": "Item Type",
@@ -170,6 +174,7 @@ TRANSLATIONS = {
         "choose_dir": "Choose Folder", "min_size": "Minimum Size (MB)", "max_results": "Max Results", "start_scan": "Start Scan",
         "cancel_scan": "Cancel Scan", "scan_intro": "Choose a location to scan. No files are deleted automatically. Review cloud-sync risks carefully.",
         "large_files": "Large Files", "large_folders": "Large Folders", "cleanup_advice": "Cleanup Advice", "junk_files": "Junk / Temp Files", "clean_selected": "Clean Selected Junk", "copy_path": "Copy Path",
+        "visualization_title": "Space Visualization", "visualization_intro": "Shows all files and folders in a directory. Click blocks to drill down.",
         "quick_search": "Quick Search", "search_mode_name": "Name Search", "search_mode_content": "Content Search",
         "search_placeholder": "Type to search...", "search_hint_name": "Wildcards * and ? supported, e.g. *.pdf, report*, ext:xlsx",
         "search_hint_content": "Search inside documents: PDF, Word, Excel, PPT, TXT and more",
@@ -179,11 +184,13 @@ TRANSLATIONS = {
         "preview_title": "Document Preview", "preview_hint": "Click a result to preview content", "preview_no_support": "This file type is not previewable",
         "search_results": "Search Results", "no_results": "No matching results", "result_count": "{count} results",
         "open_file": "Open File", "open_folder": "Open Location",
+        "open_item": "Open", "open_with": "Open with…", "copy_item": "Copy", "cut_item": "Cut",
         # ── Home ──
         "home_greeting": "Welcome back 👋",
         "home_greeting_sub": "Last scan: {time} · Disk health is good",
         "home_quick_actions": "Quick Actions",
         "home_action_scan_sub": "Analyze large files and folders",
+        "home_action_visualization_sub": "Visualize space usage distribution",
         "home_action_search_sub": "Find files by name or content",
         "home_action_recycle_sub": "Review and clean deleted files",
         "home_system_drive": "System Drive", "home_data_drive": "Data Drive",
@@ -417,6 +424,7 @@ class DiskMonitor(QMainWindow):
         self._nav_history = []
         self._scanner_thread = None
         self._scan_path = self.current_path
+        self._viz_path = self.current_path
         self._last_identity = None
         self._detail_path = None
         self.web_search = WebSearch("bing")
@@ -424,13 +432,15 @@ class DiskMonitor(QMainWindow):
         self.quick_search_engine = QuickSearchEngine()
         self.fulltext_search_engine = FullTextSearchEngine()
         self.content_extractor = ContentExtractor()
+        self._app_settings = QtCore.QSettings("FileCare", "FileCare")
         self._search_timer = None
         self._build_ui()
         self._apply_language()
         self._update_home_disks()
         self._navigate_to(self.current_path, add_history=False)
         self._update_disk_usage()
-        # 启动时自动重建索引
+        # 首次建库提示与后台增量更新分开进行，避免阻塞主界面。
+        QtCore.QTimer.singleShot(350, self._show_first_index_notice)
         QtCore.QTimer.singleShot(1000, self._auto_rebuild_index_on_startup)
 
     def _icon(self, enum):
@@ -521,12 +531,13 @@ class DiskMonitor(QMainWindow):
         title = self._register_text("app_name", QLabel()); title.setObjectName("title"); tb.addWidget(title)
         tb.addSpacing(16)
 
-        # 导航标签（首页 / 文件管理 / 磁盘空间扫描 / 快速搜索 / 回收站管理）
+        # 导航标签（首页 / 文件管理 / 大文件清理 / 空间可视化 / 快速搜索 / 回收站管理）
         self._nav_tabs = []
         nav_defs = [
             ("nav_home", self._show_home_view),
             ("nav_browse", self._show_browse_view),
             ("nav_scan", self._show_scan_view),
+            ("nav_visualization", self._show_visualization_view),
             ("nav_search", self._show_search_view),
             ("nav_recycle", self._show_recycle_view),
         ]
@@ -572,10 +583,11 @@ class DiskMonitor(QMainWindow):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu); self.tree.customContextMenuRequested.connect(self._on_context_menu)
         side.addWidget(self.tree, 1)
 
-        # ── 页面栈：0 首页 / 1 文件管理 / 2 磁盘空间扫描 / 3 快速搜索 / 4 回收站管理 ──
+        # ── 页面栈：0 首页 / 1 文件管理 / 2 大文件清理 / 3 空间可视化 / 4 快速搜索 / 5 回收站管理 ──
         self._detail_page = self._build_detail_page()
         self._home_page = self._build_home_page()
         self._scan_page = self._build_scan_page()
+        self._visualization_page = self._build_visualization_page()
         self._search_page = self._build_search_page()
         self._recycle_page = self._build_recycle_page()
 
@@ -592,8 +604,9 @@ class DiskMonitor(QMainWindow):
         self._main_stack.addWidget(self._home_page)     # index 0
         self._main_stack.addWidget(self._browse_page)   # index 1
         self._main_stack.addWidget(self._scan_page)     # index 2
-        self._main_stack.addWidget(self._search_page)   # index 3
-        self._main_stack.addWidget(self._recycle_page)  # index 4
+        self._main_stack.addWidget(self._visualization_page)  # index 3
+        self._main_stack.addWidget(self._search_page)   # index 4
+        self._main_stack.addWidget(self._recycle_page)  # index 5
         self._main_stack.setCurrentIndex(0)
         self._set_active_tab(0)
 
@@ -644,7 +657,8 @@ class DiskMonitor(QMainWindow):
         actions_row = QHBoxLayout()
         actions_row.setSpacing(14)
         for icon, title_key, sub_key, slot, bg, fg in [
-            ("📊", "space_scan", "home_action_scan_sub", self._show_scan_view, "#e8f4fd", M_ACCENT),
+            ("🧹", "space_scan", "home_action_scan_sub", self._show_scan_view, "#e8f4fd", M_ACCENT),
+            ("📊", "visualization_title", "home_action_visualization_sub", self._show_visualization_view, "#f0e8fd", "#8B5CF6"),
             ("🔍", "quick_search", "home_action_search_sub", self._show_search_view, "#e8fdf0", M_GREEN),
             ("🗑️", "recycle_bin", "home_action_recycle_sub", self._show_recycle_view, "#fde8e8", M_RED),
         ]:
@@ -1138,30 +1152,117 @@ class DiskMonitor(QMainWindow):
         self._garbage_files = self._result_tree(["类别", "名称", "实际占用", "修改时间", "建议", "风险", "完整路径"])
         self._scan_result_tabs = results
         
-        # 创建 Treemap 可视化页面
-        treemap_page = QWidget()
-        treemap_layout = QVBoxLayout(treemap_page)
-        treemap_layout.setContentsMargins(0, 0, 0, 0)
-        treemap_layout.setSpacing(8)
+        results.addTab(self._large_files, ""); results.addTab(self._large_folders, ""); results.addTab(self._suggestions, ""); results.addTab(self._garbage_files, "")
+        outer.addWidget(results, 1)
+        actions = QHBoxLayout(); actions.addStretch()
+        open_btn = self._register_text("open_location", QPushButton()); open_btn.clicked.connect(self._open_scan_result)
+        copy_btn = self._register_text("copy_path", QPushButton()); copy_btn.clicked.connect(self._copy_scan_result)
+        delete_btn = self._register_text("move_recycle", QPushButton()); delete_btn.setObjectName("danger"); delete_btn.clicked.connect(self._delete_scan_result)
+        clean_btn = self._register_text("clean_selected", QPushButton()); clean_btn.setObjectName("danger"); clean_btn.clicked.connect(self._clean_junk_selected)
+        actions.addWidget(open_btn); actions.addWidget(copy_btn); actions.addWidget(clean_btn); actions.addWidget(delete_btn); outer.addLayout(actions)
+        return page
+
+    def _build_visualization_page(self):
+        """构建独立的空间可视化页面 - 无大小和数量限制，显示所有文件"""
+        page = QWidget()
+        page.setObjectName("page")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(12)
+
+        # 控制面板
+        controls = QFrame()
+        controls.setObjectName("card")
+        c = QVBoxLayout(controls)
+        c.setContentsMargins(18, 14, 18, 14)
+
+        # 路径选择行
+        row1 = QHBoxLayout()
+        self._viz_path_label = QLabel(self._scan_path)
+        self._viz_path_label.setObjectName("pathBar")
+        self._viz_path_label.setToolTip(self._scan_path)
+        row1.addWidget(self._viz_path_label, 1)
+
+        current = QPushButton()
+        self._register_text("current_dir", current)
+        current.clicked.connect(self._viz_use_current)
+        drive = QPushButton()
+        self._register_text("current_drive", drive)
+        drive.clicked.connect(self._viz_use_drive)
+        choose = QPushButton()
+        self._register_text("choose_dir", choose)
+        choose.clicked.connect(self._viz_choose_folder)
+
+        row1.addWidget(current)
+        row1.addWidget(drive)
+        row1.addWidget(choose)
+        c.addLayout(row1)
+
+        # 操作按钮行（无阈值和数量限制）
+        row2 = QHBoxLayout()
+        intro = QLabel()
+        self._register_text("visualization_intro", intro)
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color:{M_TEXT_2}; font-size:12px;")
+        row2.addWidget(intro, 1)
+
+        self._viz_start = QPushButton()
+        self._register_text("start_scan", self._viz_start)
+        self._viz_start.setObjectName("primary")
+        self._viz_start.setCursor(Qt.PointingHandCursor)
+        self._viz_start.clicked.connect(self._start_visualization)
+        self._viz_cancel = QPushButton()
+        self._register_text("cancel_scan", self._viz_cancel)
+        self._viz_cancel.setCursor(Qt.PointingHandCursor)
+        self._viz_cancel.clicked.connect(self._cancel_visualization)
+        self._viz_cancel.setEnabled(False)
+
+        row2.addWidget(self._viz_start)
+        row2.addWidget(self._viz_cancel)
+        c.addLayout(row2)
+
+        # 进度条
+        self._viz_progress = QProgressBar()
+        self._viz_progress.setRange(0, 1)
+        self._viz_progress.setValue(0)
+        self._viz_progress.setFixedHeight(10)
+        self._viz_progress.setTextVisible(False)
+        c.addWidget(self._viz_progress)
+
+        # 状态文字
+        self._viz_status = QLabel()
+        self._viz_status.setWordWrap(True)
+        self._viz_status.setMinimumHeight(24)
+        self._viz_status.setStyleSheet(f"color:{M_TEXT_3}; font-size:11px;")
+        c.addWidget(self._viz_status)
+
+        outer.addWidget(controls)
+
+        # Treemap 可视化区域
+        viz_container = QWidget()
+        viz_layout = QVBoxLayout(viz_container)
+        viz_layout.setContentsMargins(0, 0, 0, 0)
+        viz_layout.setSpacing(8)
         
         # 面包屑导航栏
         breadcrumb_bar = QHBoxLayout()
-        self._treemap_back_btn = QPushButton("⬆ 返回上级")
-        self._treemap_back_btn.setEnabled(False)
-        self._treemap_back_btn.clicked.connect(self._treemap_go_back)
-        breadcrumb_bar.addWidget(self._treemap_back_btn)
+        self._viz_back_btn = QPushButton("⬆ 返回上级")
+        self._viz_back_btn.setEnabled(False)
+        self._viz_back_btn.setCursor(Qt.PointingHandCursor)
+        self._viz_back_btn.clicked.connect(self._viz_go_back)
+        breadcrumb_bar.addWidget(self._viz_back_btn)
         
-        self._treemap_breadcrumb = QLabel("📁 根目录")
-        self._treemap_breadcrumb.setStyleSheet("font-weight: 500; color: #333;")
-        breadcrumb_bar.addWidget(self._treemap_breadcrumb)
+        self._viz_breadcrumb = QLabel("📁 根目录")
+        self._viz_breadcrumb.setStyleSheet("font-weight: 500; color: #333;")
+        breadcrumb_bar.addWidget(self._viz_breadcrumb)
         breadcrumb_bar.addStretch()
-        treemap_layout.addLayout(breadcrumb_bar)
+        viz_layout.addLayout(breadcrumb_bar)
         
-        # Treemap 组件（直接填满视口，不滚动）
-        self._treemap_widget = TreemapWidget()
-        treemap_layout.addWidget(self._treemap_widget, 1)
+        # Treemap 组件
+        self._viz_treemap = TreemapWidget()
+        viz_layout.addWidget(self._viz_treemap, 1)
         
-        # 图例栏（预览图 03 风格：浅灰圆角卡片内的彩色方块 + 标签）
+        # 图例栏
         legend_frame = QFrame()
         legend_frame.setStyleSheet(
             f"QFrame {{ background:{M_CARD_SOFT}; border-radius:8px; border:1px solid {M_BORDER}; }}")
@@ -1184,16 +1285,9 @@ class DiskMonitor(QMainWindow):
             text_label.setStyleSheet(f"color:{M_TEXT}; font-size:11px;")
             legend_bar.addWidget(text_label)
         legend_bar.addStretch()
-        treemap_layout.addWidget(legend_frame)
+        viz_layout.addWidget(legend_frame)
         
-        results.addTab(self._large_files, ""); results.addTab(treemap_page, "📊 空间可视化"); results.addTab(self._large_folders, ""); results.addTab(self._suggestions, ""); results.addTab(self._garbage_files, "")
-        outer.addWidget(results, 1)
-        actions = QHBoxLayout(); actions.addStretch()
-        open_btn = self._register_text("open_location", QPushButton()); open_btn.clicked.connect(self._open_scan_result)
-        copy_btn = self._register_text("copy_path", QPushButton()); copy_btn.clicked.connect(self._copy_scan_result)
-        delete_btn = self._register_text("move_recycle", QPushButton()); delete_btn.setObjectName("danger"); delete_btn.clicked.connect(self._delete_scan_result)
-        clean_btn = self._register_text("clean_selected", QPushButton()); clean_btn.setObjectName("danger"); clean_btn.clicked.connect(self._clean_junk_selected)
-        actions.addWidget(open_btn); actions.addWidget(copy_btn); actions.addWidget(clean_btn); actions.addWidget(delete_btn); outer.addLayout(actions)
+        outer.addWidget(viz_container, 1)
         return page
 
     def _result_tree(self, headers):
@@ -1242,7 +1336,7 @@ class DiskMonitor(QMainWindow):
         chip_row = QHBoxLayout()
         chip_row.setSpacing(8)
         self._format_chips = []
-        for text in ["全部格式", "文档", "图片", "视频", "压缩包"]:
+        for text in ["全部格式", "文档", "图片", "视频", "压缩包", "文件夹"]:
             chip = QPushButton(text)
             chip.setObjectName("chip")
             chip.setCursor(Qt.PointingHandCursor)
@@ -1306,8 +1400,18 @@ class DiskMonitor(QMainWindow):
         self._search_result_count = QLabel("")
         self._search_result_count.setStyleSheet(f"color:{M_TEXT_3}; font-size:12px; padding-bottom:4px;")
         left_layout.addWidget(self._search_result_count)
+        self._search_filter_hint_btn = QPushButton("正在仅搜索文件夹；点击查看全部文件和文件夹")
+        self._search_filter_hint_btn.setFlat(True)
+        self._search_filter_hint_btn.setCursor(Qt.PointingHandCursor)
+        self._search_filter_hint_btn.setStyleSheet(
+            f"QPushButton {{ color:{M_ACCENT}; text-align:left; padding:0 0 6px 0; }}")
+        self._search_filter_hint_btn.clicked.connect(
+            lambda: self._on_format_chip_clicked("全部格式"))
+        self._search_filter_hint_btn.setVisible(False)
+        left_layout.addWidget(self._search_filter_hint_btn)
         self._search_result_tree = QTreeWidget()
-        self._search_result_tree.setHeaderLabels([self._tr("name"), self._tr("size"), self._tr("mtime"), self._tr("full_path")])
+        self._search_result_tree.setHeaderLabels([
+            self._tr("name"), self._tr("size"), self._tr("mtime"), "文件类型", self._tr("full_path")])
         self._search_result_tree.setAlternatingRowColors(True)
         self._search_result_tree.setTextElideMode(Qt.ElideMiddle)
         self._search_result_tree.header().setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
@@ -1319,6 +1423,10 @@ class DiskMonitor(QMainWindow):
         self._search_result_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._search_result_tree.customContextMenuRequested.connect(self._on_search_result_context_menu)
         left_layout.addWidget(self._search_result_tree, 1)
+        self._search_load_more_btn = QPushButton("加载更多 / Load more")
+        self._search_load_more_btn.clicked.connect(self._load_more_name_results)
+        self._search_load_more_btn.setVisible(False)
+        left_layout.addWidget(self._search_load_more_btn)
         split.addWidget(left)
 
         right = QFrame(); right.setObjectName("card")
@@ -1331,19 +1439,6 @@ class DiskMonitor(QMainWindow):
         self._preview_text.setReadOnly(True)
         self._preview_text.setPlaceholderText(self._tr("preview_hint"))
         right_layout.addWidget(self._preview_text, 1)
-        # 预览面板操作按钮
-        pa = QVBoxLayout(); pa.setSpacing(8)
-        btn_open = QPushButton("📂 打开所在目录")
-        btn_open.setObjectName("primary")
-        btn_open.clicked.connect(self._preview_open_location)
-        btn_copy = QPushButton("📋 复制路径")
-        btn_copy.clicked.connect(self._preview_copy_path)
-        btn_del = QPushButton("🗑️ 移至回收站")
-        btn_del.setObjectName("danger")
-        btn_del.clicked.connect(self._preview_delete)
-        for b in (btn_open, btn_copy, btn_del):
-            pa.addWidget(b)
-        right_layout.addLayout(pa)
         split.addWidget(right)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
@@ -1378,35 +1473,8 @@ class DiskMonitor(QMainWindow):
             "压缩包": ".zip,.rar,.7z,.tar,.gz",
         }
         ext_filter = ext_map.get(self._active_format, "")
-        return path_filter, ext_filter
-
-    def _preview_selected_path(self):
-        items = self._search_result_tree.selectedItems()
-        return items[0].data(0, Qt.UserRole) if items else None
-
-    def _preview_open_location(self):
-        path = self._preview_selected_path()
-        if path:
-            try:
-                os.startfile(path if os.path.isdir(path) else os.path.dirname(path))
-            except OSError as exc:
-                QMessageBox.warning(self, "打开失败", str(exc))
-        else:
-            QMessageBox.information(self, "提示", "请先选择一条搜索结果")
-
-    def _preview_copy_path(self):
-        path = self._preview_selected_path()
-        if path:
-            QtWidgets.QApplication.clipboard().setText(path)
-        else:
-            QMessageBox.information(self, "提示", "请先选择一条搜索结果")
-
-    def _preview_delete(self):
-        path = self._preview_selected_path()
-        if path:
-            self._delete_path(path)
-        else:
-            QMessageBox.information(self, "提示", "请先选择一条搜索结果")
+        is_dir_filter = True if self._active_format == "文件夹" else None
+        return path_filter, ext_filter, is_dir_filter
 
     def _show_search_tab(self):
         """兼容旧引用"""
@@ -1422,6 +1490,17 @@ class DiskMonitor(QMainWindow):
             self._search_input.setPlaceholderText("输入文件名搜索，支持通配符 * 和 ?")
         else:
             self._search_input.setPlaceholderText("输入文档内容关键词搜索...")
+            # 内容提取远比文件名索引耗时，只在用户首次进入该页时启动。
+            if ((not self.fulltext_search_engine.is_indexed or
+                 self.fulltext_search_engine.needs_full_disk_refresh) and
+                    not self.fulltext_search_engine.is_indexing()):
+                # 文件内容索引默认覆盖所有可访问磁盘，和文件名搜索一致。
+                thread = self.fulltext_search_engine.start_indexing(force_reindex=False)
+                thread.progress_signal.connect(self._on_content_index_progress)
+                thread.finished_signal.connect(self._on_content_index_finished)
+                thread.cancelled_signal.connect(self._on_content_index_cancelled)
+                thread.error_signal.connect(
+                    lambda msg: QMessageBox.warning(self, "索引错误", msg))
         # 切换后自动重新搜索
         if self._search_input.text().strip():
             self._do_search()
@@ -1456,6 +1535,8 @@ class DiskMonitor(QMainWindow):
         if not query:
             self._search_result_tree.clear()
             self._search_result_count.setText("")
+            self._search_filter_hint_btn.setVisible(False)
+            self._search_load_more_btn.setVisible(False)
             self._preview_text.clear()
             return
 
@@ -1470,30 +1551,67 @@ class DiskMonitor(QMainWindow):
         if not self.quick_search_engine.is_indexed:
             self._search_result_count.setText(self._tr("index_none"))
             self._search_result_tree.clear()
+            self._search_load_more_btn.setVisible(False)
             return
 
-        path_filter, ext_filter = self._get_search_filters()
-        results = self.quick_search_engine.search(query, max_results=500, path_filter=path_filter, ext_filter=ext_filter)
-        self._populate_search_results(results)
+        path_filter, ext_filter, is_dir_filter = self._get_search_filters()
+        total_count = self.quick_search_engine.count_search_results(
+            query, path_filter=path_filter, ext_filter=ext_filter,
+            is_dir_filter=is_dir_filter)
+        results = self.quick_search_engine.search(
+            query, max_results=5000,
+            path_filter=path_filter, ext_filter=ext_filter,
+            is_dir_filter=is_dir_filter)
+        self._populate_search_results(results, total_count=total_count)
+
+    def _load_more_name_results(self):
+        """分批追加文件名结果，最终可查看全部命中而不阻塞界面。"""
+        query = self._search_input.text().strip()
+        if not query or self._search_tabs.currentIndex() != 0:
+            return
+        path_filter, ext_filter, is_dir_filter = self._get_search_filters()
+        offset = self._search_result_tree.topLevelItemCount()
+        total_count = self.quick_search_engine.count_search_results(
+            query, path_filter=path_filter, ext_filter=ext_filter,
+            is_dir_filter=is_dir_filter)
+        results = self.quick_search_engine.search(
+            query, max_results=5000, offset=offset,
+            path_filter=path_filter, ext_filter=ext_filter,
+            is_dir_filter=is_dir_filter)
+        self._populate_search_results(
+            results, total_count=total_count, append=True)
 
     def _do_content_search(self, query):
         """内容搜索"""
+        self._search_load_more_btn.setVisible(False)
         if not self.fulltext_search_engine.is_indexed:
             self._search_result_count.setText(self._tr("index_none"))
             self._search_result_tree.clear()
             return
 
-        path_filter, ext_filter = self._get_search_filters()
+        path_filter, ext_filter, is_dir_filter = self._get_search_filters()
+        if is_dir_filter:
+            self._populate_search_results([], is_content=True)
+            return
         results = self.fulltext_search_engine.search(query, max_results=200, path_filter=path_filter, ext_filter=ext_filter)
         self._populate_search_results(results, is_content=True)
 
-    def _populate_search_results(self, results, is_content=False):
+    def _populate_search_results(self, results, is_content=False,
+                                 total_count=None, append=False):
         """填充搜索结果到树控件"""
-        self._search_result_tree.clear()
+        if not append:
+            self._search_result_tree.clear()
 
         if not results:
-            self._search_result_count.setText(self._tr("no_results"))
+            if not append:
+                folder_only = (not is_content and self._active_format == "文件夹")
+                self._search_result_count.setText(
+                    "未找到匹配的文件夹" if folder_only else self._tr("no_results"))
+                self._search_filter_hint_btn.setVisible(folder_only)
+            self._search_load_more_btn.setVisible(False)
             return
+
+        self._search_filter_hint_btn.setVisible(False)
 
         for item_data in results:
             path = item_data.get("path", "")
@@ -1501,6 +1619,8 @@ class DiskMonitor(QMainWindow):
             size = item_data.get("size", 0)
             mtime = item_data.get("mtime", 0)
             snippet = item_data.get("snippet", "")
+            is_dir = bool(item_data.get("is_dir", False))
+            ext = item_data.get("ext", "")
 
             display_name = name
             if is_content and snippet:
@@ -1509,22 +1629,31 @@ class DiskMonitor(QMainWindow):
 
             # 格式化修改时间
             mtime_str = format_time(mtime) if mtime else ""
+            file_type = "文件夹" if is_dir else (f"{ext.upper().lstrip('.')} 文件" if ext else "文件")
 
             tree_item = QTreeWidgetItem([
                 display_name,
                 format_size(size),
                 mtime_str,
+                file_type,
                 path
             ])
             tree_item.setData(0, Qt.UserRole, path)
             tree_item.setData(0, Qt.UserRole + 1, snippet if is_content else "")
             tree_item.setData(2, Qt.UserRole + 2, mtime)  # 存储原始时间戳用于排序
             tree_item.setToolTip(0, snippet if is_content else path)
-            tree_item.setToolTip(3, path)
+            tree_item.setToolTip(4, path)
             self._search_result_tree.addTopLevelItem(tree_item)
 
-        count_text = self._tr("result_count").replace("{count}", str(len(results)))
+        displayed = self._search_result_tree.topLevelItemCount()
+        if total_count is not None and total_count > displayed:
+            count_text = f"找到 {total_count} 项，已显示 {displayed} 项"
+        else:
+            count_text = self._tr("result_count").replace(
+                "{count}", str(total_count if total_count is not None else displayed))
         self._search_result_count.setText(count_text)
+        self._search_load_more_btn.setVisible(
+            not is_content and total_count is not None and displayed < total_count)
 
     def _on_search_result_clicked(self, item, column):
         """点击搜索结果时预览内容，并高亮搜索关键词"""
@@ -1587,16 +1716,52 @@ class DiskMonitor(QMainWindow):
         return escaped
 
     def _on_search_result_double_clicked(self, item, column):
-        """双击搜索结果打开文件"""
+        """双击后使用系统默认程序打开文件，目录则直接进入。"""
         path = item.data(0, Qt.UserRole)
-        if path and os.path.exists(path):
-            try:
-                if os.path.isdir(path):
-                    os.startfile(path)
-                else:
-                    os.startfile(os.path.dirname(path))
-            except Exception as e:
-                QMessageBox.warning(self, "打开失败", str(e))
+        if path:
+            self._open_search_result(path)
+
+    def _open_search_result(self, path):
+        """按 Windows 文件关联打开搜索结果。"""
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "打开失败", "该项目已不存在，请刷新索引。")
+            return
+        try:
+            os.startfile(path)
+        except Exception as e:
+            QMessageBox.warning(self, "打开失败", str(e))
+
+    def _open_search_result_with(self, path):
+        """显示 Windows 的“打开方式”选择窗口。"""
+        if not os.path.isfile(path):
+            QMessageBox.information(self, "打开方式", "只有文件可以选择打开方式。")
+            return
+        try:
+            subprocess.Popen(
+                ["rundll32.exe", "shell32.dll,OpenAs_RunDLL", path],
+                close_fds=True,
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "打开方式失败", str(e))
+
+    def _set_search_result_clipboard(self, path, cut=False):
+        """把项目按资源管理器兼容格式放入剪贴板，支持粘贴复制或移动。"""
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "操作失败", "该项目已不存在，请刷新索引。")
+            return
+        mime = QtCore.QMimeData()
+        mime.setUrls([QtCore.QUrl.fromLocalFile(path)])
+        mime.setText(path)
+        # Windows Shell 的 Preferred DropEffect：1=复制，2=移动（剪切）。
+        effect = 2 if cut else 1
+        mime.setData(
+            'application/x-qt-windows-mime;value="Preferred DropEffect"',
+            QtCore.QByteArray(effect.to_bytes(4, byteorder="little")),
+        )
+        QtWidgets.QApplication.clipboard().setMimeData(mime)
+        # Windows 原生剪贴板会延后提交 MIME 数据；立即处理一次事件，确保
+        # 随后的资源管理器粘贴或连续复制/剪切能取得正确的 DropEffect。
+        QtWidgets.QApplication.processEvents()
 
     def _on_search_result_context_menu(self, pos):
         """搜索结果右键菜单"""
@@ -1608,12 +1773,29 @@ class DiskMonitor(QMainWindow):
             return
 
         menu = QMenu(self)
-        open_action = menu.addAction(self._icon(QtWidgets.QStyle.SP_DirOpenIcon), self._tr("open_folder"))
-        copy_action = menu.addAction(self._icon(QtWidgets.QStyle.SP_DialogSaveButton), self._tr("copy_path"))
+        open_action = menu.addAction(self._tr("open_item"))
+        open_with_action = menu.addAction(self._tr("open_with"))
+        open_with_action.setEnabled(os.path.isfile(path))
+        menu.addSeparator()
+        copy_item_action = menu.addAction(self._tr("copy_item"))
+        cut_item_action = menu.addAction(self._tr("cut_item"))
+        menu.addSeparator()
+        open_folder_action = menu.addAction(
+            self._icon(QtWidgets.QStyle.SP_DirOpenIcon), self._tr("open_folder"))
+        copy_path_action = menu.addAction(
+            self._icon(QtWidgets.QStyle.SP_DialogSaveButton), self._tr("copy_path"))
         delete_action = menu.addAction(self._icon(QtWidgets.QStyle.SP_TrashIcon), self._tr("move_recycle"))
 
         chosen = menu.exec_(self._search_result_tree.viewport().mapToGlobal(pos))
         if chosen == open_action:
+            self._open_search_result(path)
+        elif chosen == open_with_action:
+            self._open_search_result_with(path)
+        elif chosen == copy_item_action:
+            self._set_search_result_clipboard(path, cut=False)
+        elif chosen == cut_item_action:
+            self._set_search_result_clipboard(path, cut=True)
+        elif chosen == open_folder_action:
             try:
                 if os.path.isdir(path):
                     os.startfile(path)
@@ -1621,7 +1803,7 @@ class DiskMonitor(QMainWindow):
                     os.startfile(os.path.dirname(path))
             except Exception as e:
                 QMessageBox.warning(self, "打开失败", str(e))
-        elif chosen == copy_action:
+        elif chosen == copy_path_action:
             QtWidgets.QApplication.clipboard().setText(path)
         elif chosen == delete_action:
             self._delete_path(path)
@@ -1644,6 +1826,7 @@ class DiskMonitor(QMainWindow):
             thread = self.quick_search_engine.start_indexing(incremental=True)
             thread.progress_signal.connect(self._on_name_index_progress)
             thread.finished_signal.connect(self._on_name_index_finished)
+            thread.cancelled_signal.connect(self._on_name_index_cancelled)
             thread.error_signal.connect(lambda msg: QMessageBox.warning(self, "索引错误", msg))
         else:
             # 内容索引
@@ -1659,6 +1842,7 @@ class DiskMonitor(QMainWindow):
             thread = self.fulltext_search_engine.start_indexing(force_reindex=False)
             thread.progress_signal.connect(self._on_content_index_progress)
             thread.finished_signal.connect(self._on_content_index_finished)
+            thread.cancelled_signal.connect(self._on_content_index_cancelled)
             thread.error_signal.connect(lambda msg: QMessageBox.warning(self, "索引错误", msg))
 
     def _rebuild_index(self):
@@ -1689,6 +1873,7 @@ class DiskMonitor(QMainWindow):
             thread = self.quick_search_engine.force_rebuild()
             thread.progress_signal.connect(self._on_name_index_progress)
             thread.finished_signal.connect(self._on_name_index_finished)
+            thread.cancelled_signal.connect(self._on_name_index_cancelled)
             thread.error_signal.connect(lambda msg: QMessageBox.warning(self, "索引错误", msg))
         else:
             # 内容索引
@@ -1704,30 +1889,33 @@ class DiskMonitor(QMainWindow):
             thread = self.fulltext_search_engine.force_reindex()
             thread.progress_signal.connect(self._on_content_index_progress)
             thread.finished_signal.connect(self._on_content_index_finished)
+            thread.cancelled_signal.connect(self._on_content_index_cancelled)
             thread.error_signal.connect(lambda msg: QMessageBox.warning(self, "索引错误", msg))
 
     def _auto_rebuild_index_on_startup(self):
-        """启动时自动重建两个索引（文件名 + 内容）。"""
-        # 先重建文件名索引
+        """每次启动均在后台执行增量索引，已有结果可立即使用。"""
         if not self.quick_search_engine.is_indexing():
-            name_thread = self.quick_search_engine.force_rebuild()
+            name_thread = self.quick_search_engine.start_indexing(incremental=True)
             name_thread.progress_signal.connect(self._on_name_index_progress)
             name_thread.finished_signal.connect(self._on_name_index_finished)
+            name_thread.cancelled_signal.connect(self._on_name_index_cancelled)
             name_thread.error_signal.connect(lambda msg: QMessageBox.warning(self, "索引错误", msg))
 
-        # 同时重建内容索引
-        if not self.fulltext_search_engine.is_indexing():
-            self._search_progress.setVisible(True)
-            self._search_progress.setRange(0, 0)
-            self._index_status_label.setText(self._tr("index_building"))
-            self._refresh_index_btn.setEnabled(False)
-            self._rebuild_index_btn.setEnabled(False)
-            self._cancel_index_btn.setEnabled(True)
-
-            content_thread = self.fulltext_search_engine.force_reindex()
-            content_thread.progress_signal.connect(self._on_content_index_progress)
-            content_thread.finished_signal.connect(self._on_content_index_finished)
-            content_thread.error_signal.connect(lambda msg: QMessageBox.warning(self, "索引错误", msg))
+    def _show_first_index_notice(self):
+        """首次没有可用文件名索引时，仅提示一次预计等待时间。"""
+        if self.quick_search_engine.is_indexed:
+            return
+        if self._app_settings.value("first_index_notice_shown", False, type=bool):
+            return
+        self._app_settings.setValue("first_index_notice_shown", True)
+        QMessageBox.information(
+            self,
+            "正在准备文件搜索",
+            "首次使用需要建立文件名索引，文件较多时可能需要几分钟。\n\n"
+            "索引会在后台进行，您可以继续使用其他功能；完成后搜索会更快。"
+            "以后启动只会自动更新发生变化的内容。\n\n"
+            "如需立即更新，可在“快速搜索”页面点击“刷新索引”。",
+        )
 
     def _cancel_index(self):
         """取消索引"""
@@ -1740,18 +1928,26 @@ class DiskMonitor(QMainWindow):
 
     def _on_name_index_progress(self, count, current_path):
         """文件名索引进度"""
-        self._index_status_label.setText(f"{self._tr('index_building')} ({count} files)")
+        self._index_status_label.setText(f"{self._tr('index_building')} ({count} 项)")
 
     def _on_name_index_finished(self, total, elapsed):
         """文件名索引完成"""
         self._search_progress.setVisible(False)
-        self._index_status_label.setText(f"{self._tr('index_complete')}: {total} files ({elapsed:.1f}s)")
+        self._index_status_label.setText(f"{self._tr('index_complete')}: {total} 项 ({elapsed:.1f}s)")
         self._refresh_index_btn.setEnabled(True)
         self._rebuild_index_btn.setEnabled(True)
         self._cancel_index_btn.setEnabled(False)
         # 自动触发搜索
         if self._search_input.text().strip():
             self._do_search()
+
+    def _on_name_index_cancelled(self, total, elapsed):
+        """取消扫描时旧索引仍然可用。"""
+        self._search_progress.setVisible(False)
+        self._index_status_label.setText(f"已取消刷新，保留 {total} 个索引项")
+        self._refresh_index_btn.setEnabled(True)
+        self._rebuild_index_btn.setEnabled(True)
+        self._cancel_index_btn.setEnabled(False)
 
     def _on_content_index_progress(self, current, total, current_file):
         """内容索引进度"""
@@ -1772,6 +1968,13 @@ class DiskMonitor(QMainWindow):
         if self._search_input.text().strip():
             self._do_search()
 
+    def _on_content_index_cancelled(self, total, elapsed):
+        self._search_progress.setVisible(False)
+        self._index_status_label.setText(f"已取消内容索引，保留 {total} 个文档")
+        self._refresh_index_btn.setEnabled(True)
+        self._rebuild_index_btn.setEnabled(True)
+        self._cancel_index_btn.setEnabled(False)
+
     def _update_search_index_status(self):
         """更新索引状态显示"""
         mode = self._search_tabs.currentIndex()
@@ -1780,7 +1983,7 @@ class DiskMonitor(QMainWindow):
                 count = self.quick_search_engine.total_files
                 last_time = self.quick_search_engine.last_index_time
                 time_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(last_time)) if last_time else "未知"
-                self._index_status_label.setText(f"索引已就绪：{count} 个文件 · 上次更新 {time_str}")
+                self._index_status_label.setText(f"索引已就绪：{count} 个目录项 · 上次更新 {time_str}")
                 self._refresh_index_btn.setEnabled(True)
                 self._rebuild_index_btn.setEnabled(True)
             else:
@@ -2219,15 +2422,15 @@ class DiskMonitor(QMainWindow):
 
     def _show_search_view(self):
         """切换到快速搜索视图"""
-        self._main_stack.setCurrentIndex(3)
-        self._set_active_tab(3)
+        self._main_stack.setCurrentIndex(4)
+        self._set_active_tab(4)
         self._update_search_index_status()
         self._search_input.setFocus()
 
     def _show_recycle_view(self):
         """切换到回收站管理视图"""
-        self._main_stack.setCurrentIndex(4)
-        self._set_active_tab(4)
+        self._main_stack.setCurrentIndex(5)
+        self._set_active_tab(5)
         self._rb_load_items()
 
     def _show_detail_view(self):
@@ -2257,51 +2460,116 @@ class DiskMonitor(QMainWindow):
     def _cancel_scan(self):
         if self._scanner_thread and self._scanner_thread.isRunning(): self._scanner_thread.cancel(); self._scan_status.setText("Cancelling scan safely..." if self.language == "en" else "正在安全取消扫描..."); self._scan_cancel.setEnabled(False)
 
+    # ── 空间可视化页面方法 ──
+    def _show_visualization_view(self):
+        self._main_stack.setCurrentIndex(3)
+        self._set_active_tab(3)
+
+    def _viz_use_current(self):
+        self._set_viz_path(self.current_path)
+
+    def _viz_use_drive(self):
+        self._set_viz_path(Path(self.current_path).anchor or self.current_path)
+
+    def _viz_choose_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "选择可视化目录", self.current_path)
+        if path:
+            self._set_viz_path(path)
+
+    def _set_viz_path(self, path):
+        self._viz_path = path
+        self._viz_path_label.setText(path)
+        self._viz_path_label.setToolTip(path)
+
+    def _start_visualization(self):
+        """开始空间可视化扫描 - 无阈值限制，显示所有文件"""
+        if hasattr(self, '_viz_scanner_thread') and self._viz_scanner_thread and self._viz_scanner_thread.isRunning():
+            return
+        # 使用极小阈值（0.001MB ≈ 1KB）来包含几乎所有文件
+        self._viz_scanner_thread = DiskScannerThread(self._viz_path, 0.001, 100000)
+        self._viz_scanner_thread.progress_signal.connect(self._viz_progress_update)
+        self._viz_scanner_thread.status_signal.connect(self._viz_status_update)
+        self._viz_scanner_thread.finished_signal.connect(self._viz_finished)
+        self._viz_scanner_thread.error_signal.connect(lambda msg: QMessageBox.warning(self, "扫描错误", msg))
+        self._viz_start.setEnabled(False)
+        self._viz_cancel.setEnabled(True)
+        self._viz_progress.setRange(0, 0)
+        self._viz_status.setText(f"正在扫描：{self._viz_path}")
+        self._viz_scanner_thread.start()
+
+    def _cancel_visualization(self):
+        if hasattr(self, '_viz_scanner_thread') and self._viz_scanner_thread and self._viz_scanner_thread.isRunning():
+            self._viz_scanner_thread.cancel()
+            self._viz_status.setText("正在安全取消扫描...")
+            self._viz_cancel.setEnabled(False)
+
+    def _viz_progress_update(self, current, total):
+        if total > 0:
+            self._viz_progress.setRange(0, total)
+            self._viz_progress.setValue(current)
+        self._viz_status.setText(f"已扫描 {current} 个文件")
+
+    def _viz_status_update(self, path):
+        self._viz_status.setText(f"正在扫描：{path}")
+
+    def _viz_finished(self, result):
+        self._viz_start.setEnabled(True)
+        self._viz_cancel.setEnabled(False)
+        self._viz_progress.setRange(0, 1)
+        self._viz_progress.setValue(1)
+        if result.get("cancelled"):
+            self._viz_status.setText(f"扫描已取消，已处理 {result['total_files']} 个文件")
+            return
+        # 填充 Treemap
+        if "folder_tree" in result:
+            self._viz_treemap.set_data(result["folder_tree"])
+            # 连接导航信号
+            try:
+                self._viz_treemap.navigate_signal.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            self._viz_treemap.navigate_signal.connect(self._viz_on_navigate)
+            # 连接右键菜单信号
+            try:
+                self._viz_treemap.context_menu_signal.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            self._viz_treemap.context_menu_signal.connect(self._viz_context_menu)
+        self._viz_status.setText(f"扫描完成，共 {result['total_files']} 个文件")
+
+    def _viz_go_back(self):
+        """可视化 Treemap 返回上一级"""
+        if hasattr(self, '_viz_treemap'):
+            self._viz_treemap.drill_up()
+
+    def _viz_on_navigate(self, path: str, name: str, can_go_back: bool):
+        """可视化导航信号处理"""
+        if hasattr(self, '_viz_treemap'):
+            self._viz_back_btn.setEnabled(can_go_back)
+            self._viz_breadcrumb.setText(f"📁 {name}")
+
+    def _viz_context_menu(self, path, name, has_children, x, y):
+        """可视化右键菜单"""
+        from PyQt5.QtCore import QPoint
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
+        open_action = menu.addAction("📂 打开文件夹")
+        open_action.triggered.connect(lambda: self._open_folder(path))
+        props_action = menu.addAction("ℹ️ 文件夹属性")
+        props_action.triggered.connect(lambda: self._show_folder_properties(path, name))
+        copy_action = menu.addAction("📋 复制路径")
+        copy_action.triggered.connect(lambda: self._copy_to_clipboard(path))
+        menu.addSeparator()
+        if has_children:
+            drill_action = menu.addAction("🔍 查看子文件夹")
+            drill_action.triggered.connect(lambda: self._viz_treemap.drill_down_to_path(path))
+        menu.exec_(QPoint(x, y))
+
     def _scan_progress_update(self, current, total):
         if total > 0: self._scan_progress.setRange(0, total); self._scan_progress.setValue(current)
         self._scan_status.setText((f"Scanned {current} files" if self.language == "en" else f"已扫描 {current} 个文件"))
 
     def _scan_status_update(self, path): self._scan_status.setText((f"Scanning: {path}" if self.language == "en" else f"正在扫描：{path}"))
-
-    def _treemap_go_back(self):
-        """Treemap 返回上一级"""
-        if hasattr(self, '_treemap_widget'):
-            self._treemap_widget.drill_up()
-
-    def _treemap_on_navigate(self, path: str, name: str, can_go_back: bool):
-        """Treemap 导航信号处理（下钻或返回时更新UI）"""
-        if hasattr(self, '_treemap_widget'):
-            self._treemap_back_btn.setEnabled(can_go_back)
-            self._treemap_breadcrumb.setText(f"📁 {name}")
-
-    def _treemap_context_menu(self, path, name, has_children, x, y):
-        """Treemap 右键菜单"""
-        from PyQt5.QtCore import QPoint
-        
-        menu = QMenu(self)
-        menu.setAttribute(Qt.WA_DeleteOnClose)
-        
-        # 打开文件夹
-        open_action = menu.addAction("📂 打开文件夹")
-        open_action.triggered.connect(lambda: self._open_folder(path))
-        
-        # 文件夹属性
-        props_action = menu.addAction("ℹ️ 文件夹属性")
-        props_action.triggered.connect(lambda: self._show_folder_properties(path, name))
-        
-        # 复制路径
-        copy_action = menu.addAction("📋 复制路径")
-        copy_action.triggered.connect(lambda: self._copy_to_clipboard(path))
-        
-        menu.addSeparator()
-        
-        # 如果有子文件夹，添加下钻选项
-        if has_children:
-            drill_action = menu.addAction("🔍 查看子文件夹")
-            drill_action.triggered.connect(lambda: self._treemap_widget.drill_down_to_path(path))
-        
-        # 在鼠标位置显示菜单
-        menu.exec_(QPoint(x, y))
 
     def _open_folder(self, path):
         """在资源管理器中打开文件夹"""
@@ -2356,22 +2624,6 @@ class DiskMonitor(QMainWindow):
         for data in result["large_files"]:
             source = FileAssociation(data["path"]).get_detailed_identity().sync_software
             item = QTreeWidgetItem([data["name"], format_size(data["allocated"]), format_size(data["size"]), format_time(data["mtime"]), source, data["path"]]); item.setData(0, Qt.UserRole, data["path"]); self._large_files.addTopLevelItem(item)
-        
-        # 填充 Treemap 可视化
-        if "folder_tree" in result and hasattr(self, '_treemap_widget'):
-            self._treemap_widget.set_data(result["folder_tree"])
-            # 连接导航信号
-            try:
-                self._treemap_widget.navigate_signal.disconnect()
-            except:
-                pass
-            self._treemap_widget.navigate_signal.connect(self._treemap_on_navigate)
-            # 连接右键菜单信号
-            try:
-                self._treemap_widget.context_menu_signal.disconnect()
-            except:
-                pass
-            self._treemap_widget.context_menu_signal.connect(self._treemap_context_menu)
         
         # 填充大文件夹列表
         for data in result["large_folders"]:
@@ -2475,7 +2727,15 @@ class DiskMonitor(QMainWindow):
         self._show_recycle_view()
 
     def closeEvent(self, event):
-        if self._scanner_thread and self._scanner_thread.isRunning(): self._scanner_thread.cancel(); self._scanner_thread.wait(2000)
+        if self._scanner_thread and self._scanner_thread.isRunning():
+            self._scanner_thread.cancel()
+            self._scanner_thread.wait()
+        if (hasattr(self, '_viz_scanner_thread') and self._viz_scanner_thread and
+                self._viz_scanner_thread.isRunning()):
+            self._viz_scanner_thread.cancel()
+            self._viz_scanner_thread.wait()
+        self.quick_search_engine.close()
+        self.fulltext_search_engine.close()
         super().closeEvent(event)
 
 

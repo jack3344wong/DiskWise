@@ -16,7 +16,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -49,7 +49,7 @@ class FullTextIndexDB:
         content     TEXT    NOT NULL DEFAULT ''
     );
 
-    -- FTS5 全文索引表（外部内容模式，手动同步）
+    -- FTS5 全文索引表（独立存储，按 documents.id 手动同步）
     CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
         path,
         content,
@@ -88,6 +88,12 @@ class FullTextIndexDB:
             conn.execute("ALTER TABLE documents ADD COLUMN content TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
+    def close(self):
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
+
     def upsert_document(self, path: str, name: str, ext: str, size: int,
                         mtime: float, content: str) -> int:
         """
@@ -108,15 +114,8 @@ class FullTextIndexDB:
                 "UPDATE documents SET name=?, ext=?, size=?, mtime=?, indexed_at=?, content_len=?, content=? WHERE id=?",
                 (name, ext, size, mtime, now, len(content), content, doc_id)
             )
-            # 更新 FTS：先删除旧记录再插入新记录
-            # 使用 try-except 防止 FTS 中不存在该记录时 delete 报错
-            try:
-                conn.execute(
-                    "INSERT INTO documents_fts(documents_fts, rowid, path, content) VALUES ('delete', ?, ?, '')",
-                    (doc_id, path)
-                )
-            except sqlite3.OperationalError:
-                pass
+            # 当前是普通 FTS5 表（非 external-content 表），直接按 rowid 删除。
+            conn.execute("DELETE FROM documents_fts WHERE rowid = ?", (doc_id,))
             conn.execute(
                 "INSERT INTO documents_fts(rowid, path, content) VALUES (?, ?, ?)",
                 (doc_id, path, content)
@@ -144,16 +143,63 @@ class FullTextIndexDB:
     def clear_all(self):
         """清空所有索引数据（用于强制重建）。"""
         conn = self._get_conn()
-        conn.execute("DELETE FROM documents")
         conn.execute("DELETE FROM documents_fts")
+        conn.execute("DELETE FROM documents")
         conn.execute("DELETE FROM fts_meta")
         conn.commit()
 
     def delete_document(self, path: str):
         """删除文档记录。"""
         conn = self._get_conn()
-        conn.execute("DELETE FROM documents WHERE path = ?", (path,))
+        row = conn.execute("SELECT id FROM documents WHERE path = ?", (path,)).fetchone()
+        if row:
+            conn.execute("DELETE FROM documents_fts WHERE rowid = ?", (row[0],))
+            conn.execute("DELETE FROM documents WHERE id = ?", (row[0],))
         conn.commit()
+
+    def prune_missing(self, scan_paths: List[str], seen_paths: set[str],
+                      preserved_prefixes: Optional[List[str]] = None):
+        """成功扫描后清理已删除的文档；取消时不调用。"""
+        roots = [os.path.normcase(os.path.abspath(path)).rstrip("\\/")
+                 for path in scan_paths]
+        normalized_seen = {os.path.normcase(os.path.abspath(path))
+                           for path in seen_paths}
+        preserved = [os.path.normcase(os.path.abspath(path)).rstrip("\\/")
+                     for path in (preserved_prefixes or [])]
+        conn = self._get_conn()
+        rows = conn.execute("SELECT id, path FROM documents").fetchall()
+        stale_ids = []
+        for doc_id, path in rows:
+            normalized = os.path.normcase(os.path.abspath(path))
+            in_scope = any(normalized == root or
+                           normalized.startswith(root + os.sep) for root in roots)
+            must_preserve = any(
+                normalized == prefix or normalized.startswith(prefix + os.sep)
+                for prefix in preserved)
+            if in_scope and not must_preserve and normalized not in normalized_seen:
+                stale_ids.append((doc_id,))
+        if stale_ids:
+            conn.executemany("DELETE FROM documents_fts WHERE rowid = ?", stale_ids)
+            conn.executemany("DELETE FROM documents WHERE id = ?", stale_ids)
+            conn.commit()
+
+    @staticmethod
+    def _extension_condition(ext_filter: str):
+        exts = [ext.strip().lower() for ext in ext_filter.split(",") if ext.strip()]
+        exts = [ext if ext.startswith(".") else "." + ext for ext in exts]
+        if not exts:
+            return "", []
+        return "ext IN (" + ",".join("?" for _ in exts) + ")", exts
+
+    @staticmethod
+    def _path_condition(path_filter: str):
+        if not path_filter:
+            return "", []
+        absolute = os.path.abspath(path_filter).rstrip("\\/")
+        escaped = absolute.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        separator = os.sep.replace("\\", "\\\\")
+        return "(path=? OR path LIKE ? ESCAPE '\\')", [
+            absolute, escaped + separator + "%"]
 
     def search(self, query: str, max_results: int = 100,
                ext_filter: str = "", path_filter: str = "") -> List[Dict]:
@@ -188,12 +234,14 @@ class FullTextIndexDB:
         params = [fts_query]
 
         if ext_filter:
-            conditions.append("documents.ext = ?")
-            params.append(ext_filter.lower())
+            ext_condition, ext_params = self._extension_condition(ext_filter)
+            conditions.append("documents." + ext_condition)
+            params.extend(ext_params)
 
         if path_filter:
-            conditions.append("documents.path LIKE ?")
-            params.append(path_filter + "%")
+            path_condition, path_params = self._path_condition(path_filter)
+            conditions.append(path_condition.replace("path", "documents.path"))
+            params.extend(path_params)
 
         where_clause = " AND ".join(conditions)
 
@@ -236,16 +284,19 @@ class FullTextIndexDB:
                          ext_filter: str, path_filter: str) -> List[Dict]:
         """当 FTS 查询失败时，使用 LIKE 子串匹配。"""
         conn = self._get_conn()
-        conditions = ["content LIKE ?"]
-        params = [f"%{query}%"]
+        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        conditions = ["content LIKE ? ESCAPE '\\'"]
+        params = [f"%{escaped_query}%"]
 
         if ext_filter:
-            conditions.append("ext = ?")
-            params.append(ext_filter.lower())
+            ext_condition, ext_params = self._extension_condition(ext_filter)
+            conditions.append(ext_condition)
+            params.extend(ext_params)
 
         if path_filter:
-            conditions.append("path LIKE ?")
-            params.append(path_filter + "%")
+            path_condition, path_params = self._path_condition(path_filter)
+            conditions.append(path_condition)
+            params.extend(path_params)
 
         where_clause = " AND ".join(conditions)
 
@@ -324,7 +375,7 @@ class FullTextIndexDB:
         conn = self._get_conn()
         try:
             cursor = conn.execute(
-                "SELECT content FROM documents_fts WHERE path = ?",
+                "SELECT content FROM documents WHERE path = ?",
                 (path,)
             )
             row = cursor.fetchone()
@@ -372,6 +423,7 @@ class FullTextIndexThread(QThread):
 
     progress_signal = pyqtSignal(int, int, str)  # (已索引数, 总数, 当前文件)
     finished_signal = pyqtSignal(int, float)     # (已索引数, 耗时秒)
+    cancelled_signal = pyqtSignal(int, float)
     error_signal = pyqtSignal(str)
 
     def __init__(self, paths: Optional[List[str]] = None, force_reindex: bool = False):
@@ -386,17 +438,35 @@ class FullTextIndexThread(QThread):
         self._cancel = True
 
     def _get_scan_paths(self) -> List[str]:
-        """获取要扫描的路径列表。"""
+        """获取要扫描的路径列表。
+
+        文件名搜索会索引所有本地卷；内容搜索也必须使用同一默认范围，
+        否则用户能按名称找到的 D 盘、移动硬盘等文档不会进入内容索引。
+        """
         if self._paths:
             return self._paths
-        # 默认扫描用户目录下的常见文档目录
-        home = Path.home()
-        default_dirs = [
-            home / "Documents",
-            home / "Desktop",
-            home / "Downloads",
-        ]
-        return [str(d) for d in default_dirs if d.exists()]
+        drives = []
+        try:
+            import psutil
+            for part in psutil.disk_partitions(all=False):
+                drive, _ = os.path.splitdrive(part.mountpoint)
+                root = drive.upper() + os.sep if drive else part.mountpoint
+                if os.path.isdir(root):
+                    drives.append(root)
+        except Exception:
+            pass
+        if os.name == "nt":
+            try:
+                import ctypes
+                mask = ctypes.windll.kernel32.GetLogicalDrives()
+                for index in range(26):
+                    if mask & (1 << index):
+                        root = f"{chr(65 + index)}:{os.sep}"
+                        if os.path.isdir(root):
+                            drives.append(root)
+            except Exception:
+                pass
+        return sorted(set(drives))
 
     def run(self):
         start_time = time.time()
@@ -405,22 +475,27 @@ class FullTextIndexThread(QThread):
         last_error_msg = ""
 
         scan_paths = self._get_scan_paths()
+        inaccessible_paths = []
 
-        # 强制重建时先清空旧数据
-        if self._force_reindex:
-            self.db.clear_all()
+        def on_walk_error(exc):
+            path = getattr(exc, "filename", "")
+            if path:
+                inaccessible_paths.append(path)
 
         # 收集所有可索引文件
         all_files = []
         for scan_path in scan_paths:
             if self._cancel:
                 break
-            for root, dirs, files in os.walk(scan_path, topdown=True, followlinks=False):
+            for root, dirs, files in os.walk(
+                    scan_path, topdown=True, onerror=on_walk_error,
+                    followlinks=False):
                 if self._cancel:
                     break
-                # 跳过隐藏目录和系统目录
+                # 跳过系统/依赖目录；用户资料、网盘、微信和其他数据盘目录保留。
                 dirs[:] = [d for d in dirs if not d.startswith(".") and d not in
-                          {"$RECYCLE.BIN", "System Volume Information", "node_modules", "__pycache__"}]
+                          {"$RECYCLE.BIN", "System Volume Information", "node_modules", "__pycache__",
+                           "Windows", "Program Files", "Program Files (x86)", "ProgramData"}]
 
                 for name in files:
                     ext = os.path.splitext(name)[1].lower()
@@ -463,6 +538,9 @@ class FullTextIndexThread(QThread):
                 except Exception as e:
                     error_count += 1
                     last_error_msg = f"{path}: {e}"
+            else:
+                # 文档已变更但无法再提取时，不保留过期内容。
+                self.db.delete_document(path)
 
             # 批量提交
             if (i + 1) % BATCH_SIZE == 0:
@@ -471,15 +549,27 @@ class FullTextIndexThread(QThread):
         # 最终提交
         self.db.commit()
 
+        if not self._cancel:
+            self.db.prune_missing(
+                scan_paths, {item[0] for item in all_files}, inaccessible_paths)
+
         elapsed = time.time() - start_time
-        self.db.set_meta("last_index_time", str(time.time()))
-        self.db.set_meta("total_documents", str(indexed_count))
+        indexed_count = self.db.get_total_count()
+        if not self._cancel:
+            self.db.set_meta("last_index_time", str(time.time()))
+            self.db.set_meta("total_documents", str(indexed_count))
+            if self._paths is None:
+                self.db.set_meta("scan_scope_version", "2")
         
         # 只在有错误时发送一次汇总错误信息
         if error_count > 0:
             self.error_signal.emit(f"索引完成，但有 {error_count} 个文件失败。最后一个错误: {last_error_msg}")
         
-        self.finished_signal.emit(indexed_count, elapsed)
+        if self._cancel:
+            self.cancelled_signal.emit(indexed_count, elapsed)
+        else:
+            self.finished_signal.emit(indexed_count, elapsed)
+        self.db.close()
 
 
 # ─── 全文搜索引擎（对外接口） ─────────────────────────────────────────────────
@@ -508,6 +598,11 @@ class FullTextSearchEngine:
         val = self.db.get_meta("last_index_time")
         return float(val) if val else None
 
+    @property
+    def needs_full_disk_refresh(self) -> bool:
+        """旧版仅索引桌面/文档/下载，升级后补建一次所有本地卷索引。"""
+        return self.db.get_meta("scan_scope_version") != "2"
+
     def start_indexing(self, paths: Optional[List[str]] = None,
                        force_reindex: bool = False) -> FullTextIndexThread:
         """启动后台索引构建。"""
@@ -526,6 +621,12 @@ class FullTextSearchEngine:
 
     def is_indexing(self) -> bool:
         return self._index_thread is not None and self._index_thread.isRunning()
+
+    def close(self):
+        if self._index_thread and self._index_thread.isRunning():
+            self._index_thread.cancel()
+            self._index_thread.wait()
+        self.db.close()
 
     def search(self, query: str, max_results: int = 100,
                ext_filter: str = "", path_filter: str = "") -> List[Dict]:
@@ -548,7 +649,7 @@ class FullTextSearchEngine:
         """强制重建全文索引（不使用增量）。"""
         if self._index_thread and self._index_thread.isRunning():
             self._index_thread.cancel()
-            self._index_thread.wait(2000)
+            self._index_thread.wait()
         self._index_thread = FullTextIndexThread(paths=paths, force_reindex=True)
         self._index_thread.start()
         return self._index_thread

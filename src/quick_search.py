@@ -3,11 +3,10 @@
 快速文件名搜索引擎 — 类 Everything 体验。
 
 核心思路：
-1. 首次启动时用 os.scandir 遍历所有磁盘，将文件/文件夹元数据写入 SQLite
-2. 后台线程监控文件系统变化（ReadDirectoryChangesW），增量更新索引
-3. 搜索时直接查 SQLite，毫秒级响应
-
-管理员权限时可选用 NTFS MFT 加速首次索引（非必需）。
+1. 首次启动或安装完成阶段遍历所有本地卷，将目录项写入 SQLite。
+2. 后续刷新用扫描批次标记安全更新：新增/修改项被覆盖，已删除项在整卷
+   扫描成功后清理；中途取消不会毁掉原有索引。
+3. 搜索时直接查 SQLite，毫秒级响应。
 """
 from __future__ import annotations
 
@@ -16,8 +15,9 @@ import re
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
-from typing import List, Dict, Optional, Callable
+from typing import List, Dict, Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -44,7 +44,8 @@ class FileIndexDB:
         size        INTEGER NOT NULL DEFAULT 0,
         mtime       REAL    NOT NULL DEFAULT 0,
         is_dir      INTEGER NOT NULL DEFAULT 0,
-        drive       TEXT    NOT NULL DEFAULT ''
+        drive       TEXT    NOT NULL DEFAULT '',
+        scan_token  TEXT    NOT NULL DEFAULT ''
     );
 
     CREATE INDEX IF NOT EXISTS idx_files_name_lower ON files(name_lower);
@@ -77,22 +78,63 @@ class FileIndexDB:
     def _init_db(self):
         conn = self._get_conn()
         conn.executescript(self.SCHEMA)
+        # 旧版数据库就地升级，不要求用户手动删除索引。
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
+        if "scan_token" not in columns:
+            conn.execute("ALTER TABLE files ADD COLUMN scan_token TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
+    def close(self):
+        """显式关闭当前线程的 SQLite 连接。"""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
+
     def insert_batch(self, records: List[tuple]):
-        """批量插入文件记录。records: [(path, name, name_lower, ext, size, mtime, is_dir, drive), ...]"""
+        """批量写入目录项，保留稳定的行 id。"""
+        if not records:
+            return
+        normalized = [record + ("",) if len(record) == 8 else record
+                      for record in records]
         conn = self._get_conn()
         conn.executemany(
-            "INSERT OR REPLACE INTO files (path, name, name_lower, ext, size, mtime, is_dir, drive) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            records,
+            "INSERT INTO files "
+            "(path, name, name_lower, ext, size, mtime, is_dir, drive, scan_token) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(path) DO UPDATE SET "
+            "name=excluded.name, name_lower=excluded.name_lower, ext=excluded.ext, "
+            "size=excluded.size, mtime=excluded.mtime, is_dir=excluded.is_dir, "
+            "drive=excluded.drive, scan_token=excluded.scan_token",
+            normalized,
         )
+        conn.commit()
+
+    def mark_prefix_seen(self, prefix: str, scan_token: str):
+        """扫描时无权进入的子树保留旧索引，避免短暂权限错误造成丢项。"""
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE files SET scan_token=? WHERE path=? OR path LIKE ? ESCAPE '\\'",
+            (scan_token, prefix, escaped + self._escape_like(os.sep) + "%"),
+        )
+        conn.commit()
+
+    def finalize_drive_scan(self, drive: str, scan_token: str):
+        """仅在整卷扫描完成后清理本轮未见的旧记录。"""
+        conn = self._get_conn()
+        conn.execute(
+            "DELETE FROM files WHERE drive=? AND scan_token<>?", (drive, scan_token))
         conn.commit()
 
     def delete_by_path_prefix(self, prefix: str):
         """删除某路径前缀下的所有记录。"""
         conn = self._get_conn()
-        conn.execute("DELETE FROM files WHERE path = ? OR path LIKE ?", (prefix, prefix + os.sep + "%"))
+        child_pattern = (self._escape_like(prefix) +
+                         self._escape_like(os.sep) + "%")
+        conn.execute(
+            "DELETE FROM files WHERE path=? OR path LIKE ? ESCAPE '\\'",
+            (prefix, child_pattern))
         conn.commit()
 
     def delete_by_drive(self, drive: str):
@@ -101,10 +143,20 @@ class FileIndexDB:
         conn.execute("DELETE FROM files WHERE drive = ?", (drive,))
         conn.commit()
 
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    @staticmethod
+    def _normalize_drive(drive: str) -> str:
+        drive = os.path.abspath(drive)
+        letter, _ = os.path.splitdrive(drive)
+        return letter.upper() + os.sep if letter else drive
+
     def search(self, query: str, max_results: int = 1000,
                drive_filter: str = "", ext_filter: str = "",
                is_dir_filter: Optional[bool] = None,
-               path_filter: str = "") -> List[Dict]:
+               path_filter: str = "", offset: int = 0) -> List[Dict]:
         """
         搜索文件名。支持：
         - 普通子串匹配（默认）
@@ -144,13 +196,18 @@ class FileIndexDB:
 
         # 路径前缀过滤
         if path_filter:
-            conditions.append("path LIKE ?")
-            params.append(path_filter + "%")
+            absolute_filter = os.path.abspath(path_filter).rstrip("\\/")
+            conditions.append("(path=? OR path LIKE ? ESCAPE '\\')")
+            params.extend([
+                absolute_filter,
+                self._escape_like(absolute_filter) +
+                self._escape_like(os.sep) + "%",
+            ])
 
         # 磁盘过滤
         if drive_filter:
             conditions.append("drive = ?")
-            params.append(drive_filter.upper() + os.sep)
+            params.append(self._normalize_drive(drive_filter))
 
         # 目录/文件过滤
         if is_dir_filter is not None:
@@ -162,13 +219,14 @@ class FileIndexDB:
             # 判断是否包含通配符
             if "*" in clean_query or "?" in clean_query:
                 # 通配符模式 → 转为 SQL LIKE
-                like_pattern = clean_query.replace("*", "%").replace("?", "_")
-                conditions.append("name_lower LIKE ?")
-                params.append(like_pattern.lower())
+                like_pattern = self._escape_like(clean_query.casefold())
+                like_pattern = like_pattern.replace("*", "%").replace("?", "_")
+                conditions.append("name_lower LIKE ? ESCAPE '\\'")
+                params.append(like_pattern)
             else:
                 # 子串匹配，按相关性排序
-                like_pattern = f"%{clean_query.lower()}%"
-                conditions.append("name_lower LIKE ?")
+                like_pattern = f"%{self._escape_like(clean_query.casefold())}%"
+                conditions.append("name_lower LIKE ? ESCAPE '\\'")
                 params.append(like_pattern)
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
@@ -177,25 +235,27 @@ class FileIndexDB:
         if clean_query and "*" not in clean_query and "?" not in clean_query:
             order = """
                 ORDER BY
-                    CASE WHEN name_lower LIKE ? THEN 0
-                         WHEN name_lower LIKE ? THEN 1
+                    CASE WHEN name_lower LIKE ? ESCAPE '\\' THEN 0
+                         WHEN name_lower LIKE ? ESCAPE '\\' THEN 1
                          ELSE 2
                     END,
-                    size DESC
+                    size DESC,
+                    path COLLATE NOCASE
             """
-            params.append(clean_query.lower() + "%")
-            params.append(f"%{clean_query.lower()}%")
+            escaped_query = self._escape_like(clean_query.casefold())
+            params.append(escaped_query + "%")
+            params.append(f"%{escaped_query}%")
         else:
-            order = "ORDER BY size DESC"
+            order = "ORDER BY size DESC, path COLLATE NOCASE"
 
         sql = f"""
             SELECT path, name, ext, size, mtime, is_dir, drive
             FROM files
             WHERE {where_clause}
             {order}
-            LIMIT ?
+            LIMIT ? OFFSET ?
         """
-        params.append(max_results)
+        params.extend([max_results, max(0, int(offset))])
 
         try:
             cursor = conn.execute(sql, params)
@@ -213,6 +273,53 @@ class FileIndexDB:
             return results
         except sqlite3.OperationalError:
             return []
+
+    def count_search_results(self, query: str, drive_filter: str = "",
+                             ext_filter: str = "", is_dir_filter: Optional[bool] = None,
+                             path_filter: str = "") -> int:
+        """返回与界面当前常用筛选一致的命中总数。"""
+        # 复用查询构造的边界规则；计数时不做排序。
+        clean_query = query.strip()
+        ext_from_query = ""
+        ext_match = re.search(r'\bext:(\S+)', clean_query)
+        if ext_match:
+            ext_from_query = ext_match.group(1).casefold().lstrip(".")
+            clean_query = (clean_query[:ext_match.start()] +
+                           clean_query[ext_match.end():]).strip()
+        conditions, params = [], []
+        ext = ext_filter.lstrip(".").casefold() or ext_from_query
+        exts = [e.strip().lstrip(".") for e in ext.split(",") if e.strip()]
+        if exts:
+            conditions.append("ext IN (" + ",".join("?" for _ in exts) + ")")
+            params.extend("." + e for e in exts)
+        if path_filter:
+            absolute_filter = os.path.abspath(path_filter).rstrip("\\/")
+            conditions.append("(path=? OR path LIKE ? ESCAPE '\\')")
+            params.extend([
+                absolute_filter,
+                self._escape_like(absolute_filter) +
+                self._escape_like(os.sep) + "%",
+            ])
+        if drive_filter:
+            conditions.append("drive=?")
+            params.append(self._normalize_drive(drive_filter))
+        if is_dir_filter is not None:
+            conditions.append("is_dir=?")
+            params.append(1 if is_dir_filter else 0)
+        if clean_query:
+            if "*" in clean_query or "?" in clean_query:
+                pattern = self._escape_like(clean_query.casefold())
+                pattern = pattern.replace("*", "%").replace("?", "_")
+            else:
+                pattern = "%" + self._escape_like(clean_query.casefold()) + "%"
+            conditions.append("name_lower LIKE ? ESCAPE '\\'")
+            params.append(pattern)
+        where = " AND ".join(conditions) if conditions else "1=1"
+        try:
+            return int(self._get_conn().execute(
+                f"SELECT COUNT(*) FROM files WHERE {where}", params).fetchone()[0])
+        except sqlite3.OperationalError:
+            return 0
 
     def get_total_count(self) -> int:
         conn = self._get_conn()
@@ -260,158 +367,166 @@ class IndexBuildThread(QThread):
     progress_signal = pyqtSignal(int, str)       # (已扫描文件数, 当前路径)
     drive_signal = pyqtSignal(str, str)           # (drive, status: "start"|"done")
     finished_signal = pyqtSignal(int, float)      # (总文件数, 耗时秒)
+    cancelled_signal = pyqtSignal(int, float)     # (已保留的索引总数, 耗时秒)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, drives: Optional[List[str]] = None, incremental: bool = False):
+    def __init__(self, drives: Optional[List[str]] = None, incremental: bool = False,
+                 db_path: Optional[str] = None,
+                 time_budget_seconds: Optional[float] = None):
         super().__init__()
-        self.db = FileIndexDB()
+        self.db = FileIndexDB(db_path)
         self._cancel = False
         self._drives = drives
         self._incremental = incremental
+        self._time_budget_seconds = time_budget_seconds
+        self._deadline: Optional[float] = None
+        self._budget_exhausted = False
 
     def cancel(self):
         self._cancel = True
 
     def _get_drives(self) -> List[str]:
         if self._drives:
-            return self._drives
+            # 主程序传入的通常是卷根目录；保留明确子目录也方便
+            # 安全测试和未来的“仅索引指定位置”功能。
+            return sorted({os.path.abspath(d) for d in self._drives
+                           if os.path.isdir(d)})
         import psutil
         drives = []
-        for part in psutil.disk_partitions(all=False):
-            drive, _ = os.path.splitdrive(part.mountpoint)
-            if drive:
-                drives.append(drive.upper() + os.sep)
+        try:
+            for part in psutil.disk_partitions(all=True):
+                drive, _ = os.path.splitdrive(part.mountpoint)
+                root = drive.upper() + os.sep if drive else part.mountpoint
+                if os.path.isdir(root):
+                    drives.append(root)
+        except Exception:
+            pass
+        # psutil 在某些 Windows 配置下会漏掉本地卷，用系统位图补全。
+        if os.name == "nt":
+            try:
+                import ctypes
+                mask = ctypes.windll.kernel32.GetLogicalDrives()
+                for index in range(26):
+                    if mask & (1 << index):
+                        root = f"{chr(65 + index)}:{os.sep}"
+                        if os.path.isdir(root):
+                            drives.append(root)
+            except Exception:
+                pass
         return sorted(set(drives))
 
     def run(self):
         start_time = time.time()
-        total = 0
+        if self._time_budget_seconds is not None:
+            self._deadline = time.monotonic() + max(1.0, self._time_budget_seconds)
         drives = self._get_drives()
+        scan_errors = 0
+
+        if not drives:
+            self.error_signal.emit("没有找到可索引的磁盘或目录")
+            self.db.set_meta("index_complete", "0")
+            self.finished_signal.emit(self.db.get_total_count(), 0.0)
+            self.db.close()
+            return
 
         for drive in drives:
-            if self._cancel:
+            if self._cancel or self._past_deadline():
                 break
             self.drive_signal.emit(drive, "start")
             try:
-                count = self._scan_drive(drive)
-                total += count
+                self._scan_drive(drive)
             except Exception as e:
+                scan_errors += 1
                 self.error_signal.emit(f"扫描 {drive} 失败: {e}")
             self.drive_signal.emit(drive, "done")
 
         elapsed = time.time() - start_time
+        total = self.db.get_total_count()
+        if self._cancel:
+            self.cancelled_signal.emit(total, elapsed)
+            self.db.close()
+            return
         self.db.set_meta("last_index_time", str(time.time()))
         self.db.set_meta("total_files", str(total))
+        incomplete = scan_errors or self._budget_exhausted
+        self.db.set_meta("index_complete", "0" if incomplete else "1")
         self.finished_signal.emit(total, elapsed)
+        self.db.close()
+
+    def _past_deadline(self) -> bool:
+        if self._deadline is None or time.monotonic() < self._deadline:
+            return False
+        self._budget_exhausted = True
+        return True
 
     def _scan_drive(self, drive: str) -> int:
-        """遍历一个磁盘，将结果批量写入数据库。"""
-        if not self._incremental:
-            self.db.delete_by_drive(drive)
-
+        """遍历一个磁盘，不主动排除任何目录项。"""
         batch = []
         count = 0
-        BATCH_SIZE = 2000
+        # 大批量事务避免为每两千项都落盘一次；索引构建主要受目录遍历和
+        # SQLite 提交影响，增大批量能明显缩短首次构建时间。
+        BATCH_SIZE = 10000
+        scan_token = uuid.uuid4().hex
 
-        for root, dirs, files in os.walk(drive, topdown=True, followlinks=False):
-            if self._cancel:
+        def flush():
+            if batch:
+                self.db.insert_batch(batch)
+                batch.clear()
+
+        def on_walk_error(exc):
+            # 资源管理器可以显示但当前用户无权遍历的子树，
+            # 保留已有索引，不将“读取失败”误判成“已删除”。
+            path = getattr(exc, "filename", "")
+            if path:
+                self.db.mark_prefix_seen(path, scan_token)
+
+        # os.walk 会只返回名称，随后又对每个项目 os.stat 一次。直接使用
+        # scandir 可复用系统已取到的目录项信息，大型磁盘会快得多。
+        pending_dirs = [drive]
+        while pending_dirs:
+            if self._cancel or self._past_deadline():
                 break
-
-            # 跳过系统/回收站等目录
-            lower_root = root.lower()
-            skip_parts = {"$recycle.bin", "system volume information", "$windows.~bt",
-                          "$windows.~ws", "windows\\temp", "windows\\winsxs"}
-            if any(part in lower_root for part in skip_parts):
-                dirs.clear()
-                continue
-
-            # 跳过符号链接目录
-            dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
-
-            # 处理文件
-            for name in files:
-                if self._cancel:
-                    break
-                full_path = os.path.join(root, name)
-                try:
-                    st = os.stat(full_path, follow_symlinks=False)
-                    if os.path.islink(full_path):
-                        continue
-                    
-                    # 增量模式：检查文件是否已索引且未修改
-                    if self._incremental and self.db.is_indexed(full_path, st.st_mtime):
-                        continue
-                    
-                    ext = os.path.splitext(name)[1].lower()
-                    batch.append((
-                        full_path, name, name.lower(), ext,
-                        st.st_size, st.st_mtime, 0, drive,
-                    ))
-                    count += 1
-                except (OSError, PermissionError):
-                    continue
-
-                if len(batch) >= BATCH_SIZE:
-                    self.db.insert_batch(batch)
-                    batch.clear()
-                    self.progress_signal.emit(count, root)
-
-            # 处理目录本身
-            for d in dirs:
-                full_path = os.path.join(root, d)
-                try:
-                    st = os.stat(full_path, follow_symlinks=False)
-                    
-                    # 增量模式：检查目录是否已索引且未修改
-                    if self._incremental and self.db.is_indexed(full_path, st.st_mtime):
-                        continue
-                    
-                    batch.append((
-                        full_path, d, d.lower(), "",
-                        0, st.st_mtime, 1, drive,
-                    ))
-                    count += 1
-                except (OSError, PermissionError):
-                    continue
+            root = pending_dirs.pop()
+            try:
+                with os.scandir(root) as entries:
+                    for entry in entries:
+                        if self._cancel or self._past_deadline():
+                            break
+                        name = entry.name
+                        full_path = entry.path
+                        try:
+                            is_dir = entry.is_dir(follow_symlinks=False)
+                            st = entry.stat(follow_symlinks=False)
+                            attrs = getattr(st, "st_file_attributes", 0)
+                            is_reparse = entry.is_symlink() or bool(attrs & 0x400)
+                            batch.append((
+                                full_path, name, name.casefold(),
+                                "" if is_dir else os.path.splitext(name)[1].lower(),
+                                0 if is_dir else st.st_size, st.st_mtime,
+                                1 if is_dir else 0, drive, scan_token,
+                            ))
+                            count += 1
+                            if is_dir and not is_reparse:
+                                pending_dirs.append(full_path)
+                        except (OSError, PermissionError):
+                            # 能列出但无法读取属性的项仍可按名称搜索。
+                            batch.append((
+                                full_path, name, name.casefold(),
+                                "", 0, 0.0, 0, drive, scan_token,
+                            ))
+                            count += 1
+                        if len(batch) >= BATCH_SIZE:
+                            flush()
+                            self.progress_signal.emit(count, root)
+            except (OSError, PermissionError) as exc:
+                on_walk_error(exc)
 
         # 写入剩余
-        if batch:
-            self.db.insert_batch(batch)
+        flush()
+        if not self._cancel and not self._budget_exhausted:
+            self.db.finalize_drive_scan(drive, scan_token)
 
         return count
-
-
-# ─── 文件系统监控线程 ──────────────────────────────────────────────────────────
-class FileWatchThread(QThread):
-    """后台线程：使用 ReadDirectoryChangesW 监控文件系统变化，增量更新索引。"""
-
-    update_signal = pyqtSignal(str, str)  # (path, event_type: "created"|"deleted"|"modified"|"renamed")
-
-    def __init__(self, drives: Optional[List[str]] = None):
-        super().__init__()
-        self._cancel = False
-        self._drives = drives or []
-        self.db = FileIndexDB()
-
-    def cancel(self):
-        self._cancel = True
-
-    def run(self):
-        """使用 FindFirstChangeNotification / ReadDirectoryChangesW 监控。"""
-        try:
-            import ctypes
-            from ctypes import wintypes
-        except ImportError:
-            return
-
-        # 简化方案：定期扫描变更（每 30 秒检查一次修改时间）
-        # 完整的 ReadDirectoryChangesW 实现过于复杂，且对目标用户（文员）不需要实时性
-        while not self._cancel:
-            time.sleep(30)
-            if self._cancel:
-                break
-            # 这里可以做增量检查，但为了简化，暂时不做
-            # 用户可以手动刷新索引
 
 
 # ─── 搜索引擎（对外接口） ─────────────────────────────────────────────────────
@@ -424,12 +539,16 @@ class QuickSearchEngine:
     def __init__(self):
         self.db = FileIndexDB()
         self._index_thread: Optional[IndexBuildThread] = None
-        self._watch_thread: Optional[FileWatchThread] = None
 
     @property
     def is_indexed(self) -> bool:
         """是否已经建过索引。"""
         return self.db.get_total_count() > 0
+
+    @property
+    def is_index_complete(self) -> bool:
+        """是否已完整扫描所有可访问磁盘。"""
+        return self.db.get_meta("index_complete") == "1"
 
     @property
     def total_files(self) -> int:
@@ -458,12 +577,28 @@ class QuickSearchEngine:
     def is_indexing(self) -> bool:
         return self._index_thread is not None and self._index_thread.isRunning()
 
+    def close(self):
+        if self._index_thread and self._index_thread.isRunning():
+            self._index_thread.cancel()
+            self._index_thread.wait()
+        self.db.close()
+
     def search(self, query: str, max_results: int = 500,
                drive_filter: str = "", ext_filter: str = "",
                is_dir_filter: Optional[bool] = None,
-               path_filter: str = "") -> List[Dict]:
+               path_filter: str = "", offset: int = 0) -> List[Dict]:
         """搜索文件。"""
-        return self.db.search(query, max_results, drive_filter, ext_filter, is_dir_filter, path_filter)
+        return self.db.search(
+            query, max_results, drive_filter, ext_filter,
+            is_dir_filter, path_filter, offset)
+
+    def count_search_results(self, query: str, drive_filter: str = "",
+                             ext_filter: str = "", is_dir_filter: Optional[bool] = None,
+                             path_filter: str = "") -> int:
+        return self.db.count_search_results(
+            query, drive_filter=drive_filter,
+            ext_filter=ext_filter, is_dir_filter=is_dir_filter,
+            path_filter=path_filter)
 
     def get_indexed_drives(self) -> List[str]:
         return self.db.get_indexed_drives()
@@ -476,7 +611,27 @@ class QuickSearchEngine:
         """强制重建索引（不使用增量）。"""
         if self._index_thread and self._index_thread.isRunning():
             self._index_thread.cancel()
-            self._index_thread.wait(2000)
+            # 不允许两个索引线程同时清理同一数据库。
+            self._index_thread.wait()
         self._index_thread = IndexBuildThread(drives=drives, incremental=False)
         self._index_thread.start()
         return self._index_thread
+
+
+def build_name_index_sync(drives: Optional[List[str]] = None,
+                           db_path: Optional[str] = None,
+                           time_budget_seconds: Optional[float] = None
+                           ) -> tuple[int, float, List[str]]:
+    """供安装程序调用的无界面首次索引入口。"""
+    result = {"total": 0, "elapsed": 0.0}
+    errors: List[str] = []
+    thread = IndexBuildThread(
+        drives=drives, incremental=False, db_path=db_path,
+        time_budget_seconds=time_budget_seconds)
+    thread.finished_signal.connect(
+        lambda total, elapsed: result.update(total=total, elapsed=elapsed))
+    thread.error_signal.connect(errors.append)
+    # 同步调用 run，不创建隐藏 GUI；安装器等待返回即可。
+    thread.run()
+    thread.db.close()
+    return int(result["total"]), float(result["elapsed"]), errors

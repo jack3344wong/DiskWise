@@ -1,239 +1,106 @@
-# 磁盘智理 / DiskWise
+# 文件管家 / FileCare
 
 <div align="center">
 
-**Windows 磁盘空间分析与智能文件搜索工具**
+**面向 Windows 的磁盘空间分析、文件管理与本地搜索工具**
 
-[![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Version](https://img.shields.io/badge/version-1.1.0-4a90e2.svg)](CHANGES.md)
+[![Python](https://img.shields.io/badge/release%20runtime-Python%203.8-blue.svg)](requirements-win7.txt)
+[![Platform](https://img.shields.io/badge/Windows-7%20SP1%20x64%2B-lightgrey.svg)](packaging/README.md)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
 
 </div>
 
-## 📖 项目简介
+## 项目简介
 
-磁盘智理是一款专为非技术背景办公人员设计的 Windows 磁盘管理工具。它集成了磁盘空间分析、快速文件搜索（类 Everything）、文档内容搜索（类 Anytxt）和文件预览等功能，帮助用户高效管理磁盘空间和快速定位文件。
+文件管家是一款本地运行的 Windows 文件管理工具，适合希望直观查看磁盘占用、
+快速定位文件并安全清理空间的用户。文件名索引和文档内容索引均保存在本机，
+无需上传文件内容。
 
-## ✨ 核心功能
+## 主要功能
 
-### 🔍 快速文件搜索（类 Everything）
-- 基于 SQLite 的文件名索引系统
-- 毫秒级搜索响应
-- 支持通配符搜索（`*` 和 `?`）
-- 支持路径前缀和多扩展名过滤
-- 增量索引机制，只索引新增或修改的文件
+- 文件管理：浏览、预览、复制路径及安全删除文件。
+- 大文件清理：分析大文件、大文件夹和可解释的清理建议。
+- 空间可视化：以 Treemap 展示目录中的文件与文件夹，可逐级下钻。
+- 快速搜索：完整索引可访问的磁盘目录项，支持通配符、格式和路径过滤。
+- 搜索结果操作：默认程序打开、选择打开方式、复制、剪切及打开所在目录。
+- 内容搜索：本地检索 PDF、Word、Excel、PowerPoint、RTF 和常见文本文件。
+- 回收站管理：查看、恢复或清理软件回收站中的项目。
 
-### 📄 文档内容搜索（类 Anytxt）
-- 基于 SQLite FTS5 的全文索引
-- 支持 35 种文件格式（PDF、Word、Excel、PPT、TXT 等）
-- 搜索结果高亮显示匹配片段
-- 支持中文搜索（使用 LIKE 子串匹配）
-- 启动时自动重建索引（后台执行）
+## 普通用户安装
 
-### 👁️ 文件预览
-- 点击文件即可预览内容
-- 搜索关键词黄色背景高亮显示
-- 支持多种文档格式预览
+从 GitHub Releases 下载 `FileCare-Setup-1.1.0.exe`，双击后按向导安装即可，
+不需要另行安装 Python 或其他运行环境。
 
-### 💾 磁盘空间分析
-- 扫描大文件和大文件夹
-- 识别文件来源软件与默认打开程序
-- 给出保守的删除建议
-- 云盘同步风险提示
+安装器提供以下可选项：
 
-### 🗑️ 回收站管理
-- 安全的文件删除（移至回收站）
-- 支持永久删除（需确认）
-- 打开文件所在目录
-- 复制文件路径
+- 创建桌面快捷方式；
+- 创建开始菜单文件夹，内含启动入口和“卸载软件”入口。
 
-## 🖥️ 界面预览
+安装过程中会以无边框动画卡片展示扫描效果，并以当前登录用户身份在最多约
+20 秒内建立首批文件名索引。软件首次启动后会在后台继续补全其余索引。
 
-### 主界面
-- **工具栏导航**：首页、磁盘空间扫描、快速搜索、回收站管理
-- **左侧文件浏览器**：磁盘/目录导航，文件列表
-- **中央工作区**：文件详情/扫描结果/搜索结果
-- **右侧预览面板**：文档内容预览（支持关键词高亮）
-- **底部状态栏**：磁盘使用情况、当前目录信息
+## 系统要求
 
-### 搜索界面
-- **双标签页设计**：文件名搜索 / 内容搜索
-- **实时搜索**：输入时自动触发（300ms 防抖）
-- **搜索范围**：全局搜索 / 当前目录 / 选择目录
-- **文件格式过滤**：文档/图片/视频/音频/压缩包/自定义
-- **结果排序**：支持点击列头排序，列宽可调整
+- Windows 7 SP1 64 位，或更新的 64 位 Windows；
+- 建议至少 4 GB 内存；
+- 未安装 SP1 的 Windows 7 和 32 位 Windows 暂不支持。
 
-## 🚀 快速开始
+## 从源码运行
 
-### 环境要求
-- Windows 10/11
-- Python 3.11+
-- Git（可选，用于版本控制）
+开发环境建议使用 64 位 Python 3.8.10，以便与发布构建保持一致：
 
-### 安装步骤
-
-#### 方式一：运行源码（推荐开发者）
-
-1. **克隆仓库**
-```bash
-git clone https://github.com/jack3344wong/DiskWise.git
-cd DiskWise
-```
-
-2. **创建虚拟环境**
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-win7.txt
+python src\main.py
 ```
 
-3. **安装依赖**
-```bash
-pip install -r requirements.txt
+日常开发若使用其他 Python 版本，可安装 `requirements.txt`；最终发布必须使用
+`requirements-win7.txt` 中锁定的版本。
+
+## 测试
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+python test_win7_compatibility.py
+python test_quick_search_completeness.py
+python test_fulltext_search.py
+python test_ui_smoke.py
 ```
 
-4. **运行程序**
-```bash
-python src/main.py
+测试不会删除用户真实文件；界面烟测使用隔离的临时回收站和测试用户目录。
+
+## 构建安装包
+
+```powershell
+python -m PyInstaller --clean --noconfirm packaging\FileCare.spec
+& "C:\Program Files\Inno Setup 7\ISCC.exe" packaging\FileCare.iss
 ```
 
-#### 方式二：便携版（推荐普通用户）
+生成的单文件安装包位于 `installer-output\FileCare-Setup-1.1.0.exe`。完整的
+Win7 发布环境和验收要求见 [packaging/README.md](packaging/README.md)。
 
-1. 从 [Releases](https://github.com/jack3344wong/DiskWise/releases/latest) 页面下载：
-   - **DiskWise-Setup-1.0.0.exe**（安装包，推荐）- 有安装向导，自动创建桌面快捷方式
-   - **DiskWise-Portable-1.0.0.zip**（便携版）- 解压后运行 `DiskWise.exe`
-2. 运行安装程序或解压后双击 `DiskWise.exe`
+## 项目结构
 
-## 📦 打包发布
-
-### 使用 PyInstaller 打包
-
-```bash
-# 激活虚拟环境
-.venv\Scripts\activate
-
-# 安装 PyInstaller（如未安装）
-pip install pyinstaller
-
-# 打包
-pyinstaller packaging/DiskWise.spec
+```text
+src/                    应用源代码
+assets/                 图标与安装动画资源
+packaging/              PyInstaller 与 Inno Setup 配置
+tools/                  可重复生成资源的辅助工具
+test_*.py               功能和兼容性回归测试
+requirements.txt        日常开发依赖
+requirements-win7.txt   Win7 发布锁定依赖
 ```
 
-打包完成后，可执行文件在 `dist/DiskWise/` 目录。
+## 安全与隐私
 
-### 创建便携版 ZIP
+- 索引数据库位于当前用户的 `~/.diskwise/` 目录。
+- 扫描完成后不会自动删除文件。
+- 永久删除操作需要用户明确确认，且不可恢复。
+- 云盘、系统目录和程序目录会显示额外风险提示。
 
-```bash
-cd dist
-# Windows PowerShell
-Compress-Archive -Path DiskWise -DestinationPath DiskWise-Portable-1.0.0.zip
-```
+## 许可证
 
-## 🛠️ 技术栈
-
-- **Python 3.11+** - 主要开发语言
-- **PyQt5** - GUI 框架
-- **SQLite** - 本地数据库（文件名索引 + FTS5 全文索引）
-- **pypdf** - PDF 解析
-- **python-docx** - Word 文档解析
-- **openpyxl** - Excel 解析
-- **python-pptx** - PowerPoint 解析
-- **striprtf** - RTF 解析
-- **psutil** - 系统信息获取
-
-## 📁 项目结构
-
-```
-DiskWise_Project/
-├── src/                          # 源代码
-│   ├── main.py                   # 程序入口
-│   ├── main_window.py            # 主窗口 UI
-│   ├── quick_search.py           # 快速文件名搜索引擎
-│   ├── fulltext_search.py        # 全文搜索引擎
-│   ├── content_extractor.py      # 文档内容提取器
-│   ├── disk_scanner.py           # 磁盘空间扫描
-│   ├── file_association.py       # 文件关联识别
-│   ├── file_operations.py        # 文件操作
-│   ├── recycle_bin_ui.py         # 回收站 UI
-│   └── web_search.py             # 网络搜索
-├── assets/                       # 资源文件
-│   └── diskwise.ico              # 应用图标
-├── packaging/                    # 打包配置
-│   └── DiskWise.spec             # PyInstaller 配置
-├── requirements.txt              # Python 依赖
-├── README.md                     # 项目说明
-├── HANDOVER.md                   # 交接文档
-└── .gitignore                    # Git 忽略规则
-```
-
-## 📝 使用说明
-
-### 磁盘空间扫描
-1. 点击工具栏"磁盘空间扫描"按钮
-2. 选择扫描范围（当前目录/当前磁盘/选择目录）
-3. 设置最小文件大小和最多显示数量
-4. 点击"开始扫描"
-5. 查看扫描结果：大文件、大文件夹、清理建议、垃圾文件
-
-### 快速文件名搜索
-1. 点击工具栏"快速搜索"按钮
-2. 选择"📄 文件名搜索"标签页
-3. 在搜索框输入关键词（支持通配符 `*` 和 `?`）
-4. 实时显示搜索结果
-5. 点击结果可预览文件内容
-
-### 文档内容搜索
-1. 点击工具栏"快速搜索"按钮
-2. 选择"📖 内容搜索"标签页
-3. 在搜索框输入关键词
-4. 实时显示包含该关键词的文档
-5. 点击结果可预览文档内容，关键词高亮显示
-
-### 索引管理
-- **刷新索引**：增量更新，只索引新增或修改的文件
-- **重建索引**：删除旧索引并重新扫描所有文件
-- **自动重建**：程序启动时自动在后台重建索引
-
-## ⚠️ 安全说明
-
-- 程序不会在扫描完成后自动删除文件
-- 系统目录、软件目录和云盘同步目录会显示额外风险提示
-- 永久删除不可恢复，请在确认备份和同步状态后使用
-- 索引数据存储在 `~/.diskwise/` 目录，可安全删除
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
-## 🙏 致谢
-
-- [Everything](https://www.voidtools.com/) - 快速文件搜索的灵感来源
-- [Anytxt Searcher](https://anytxt.net/) - 文档内容搜索的灵感来源
-- [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) - 优秀的 GUI 框架
-
-## 📮 联系方式
-
-如有问题或建议，请通过 GitHub Issues 反馈。
-
-## 📋 更新日志
-
-### v1.0.1 (2026-08-31)
-
-**优化与修复：**
-
-1. **移除冗余刷新按钮** - 工具栏不再显示无实际作用的刷新按钮，界面更简洁
-2. **单实例运行** - 程序现在支持单实例运行，重复启动时会自动激活已打开的窗口，而不是创建多个窗口
-3. **索引提示优化** - 启动时显示可关闭的索引构建提醒窗口，告知用户首次索引需要较长时间，支持"不再显示"选项
-4. **文件名搜索增强** - 修复了文件名搜索不完整的问题，搜索结果更全面，最大结果数从500提升至1000
-5. **扫描进度条稳定性** - 修复了磁盘空间扫描时进度条抖动的问题，界面更稳定美观
-
----
-
-<div align="center">
-
-**Made with ❤️ for Windows Users**
-
-</div>
+本项目采用 [MIT License](LICENSE)。问题和改进建议可通过 GitHub Issues 提交。

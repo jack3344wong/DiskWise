@@ -1,0 +1,27 @@
+# Reproducible Windows 7 SP1 x64 release environment.
+# Install with 64-bit CPython 3.8.10. Do not upgrade these pins independently:
+# newer Python/Qt/native wheels may raise the minimum supported Windows version.
+PyQt5==5.15.10
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.13.0
+psutil==5.9.8
+pypdf==3.17.4
+python-docx==1.1.0
+openpyxl==3.1.2
+python-pptx==0.6.23
+striprtf==0.0.26
+Pillow==9.5.0
+lxml==4.9.3
+pyinstaller==5.13.2
+
+# Locked transitive dependencies used by the release bundle.
+XlsxWriter==3.1.9
+et-xmlfile==1.1.0
+typing_extensions==4.9.0
+altgraph==0.17.4
+pywin32-ctypes==0.2.2
+pyinstaller-hooks-contrib==2023.8
+pefile==2023.2.7
+importlib-metadata==6.8.0
+packaging==23.2
+zipp==3.17.0

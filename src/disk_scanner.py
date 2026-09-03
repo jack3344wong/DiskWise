@@ -130,12 +130,14 @@ class DiskScannerThread(QThread):
         own_allocated = defaultdict(int)
         own_file_counts = defaultdict(int)
         parents = {}
-        file_ids = set()
-        # 达到阈值的文件 → Treemap 叶子节点（按所在目录分组）
+        directory_states = {}
+        # 所有文件 → Treemap 叶子节点（按所在目录分组）
         file_leaf_nodes = defaultdict(list)
         try:
             def on_walk_error(exc):
-                result["errors"].append({"path": getattr(exc, "filename", self.root_path), "error": str(exc)})
+                path = getattr(exc, "filename", self.root_path)
+                result["errors"].append({"path": path, "error": str(exc)})
+                directory_states[path] = "无法访问，未统计内容"
 
             for root, dirs, files in os.walk(self.root_path, topdown=True, onerror=on_walk_error, followlinks=False):
                 if self._cancel_requested:
@@ -151,11 +153,18 @@ class DiskScannerThread(QThread):
                         attrs = getattr(st, "st_file_attributes", 0)
                         if os.path.islink(full) or attrs & FILE_ATTRIBUTE_REPARSE_POINT:
                             result["skipped_reparse"] += 1
+                            # 不跟随 Windows 联接点，以免重复统计或形成循环；
+                            # 但目录项本身必须保留，才能与资源管理器一致。
+                            parents[full] = root
+                            directory_states[full] = "链接目录，未重复扫描"
                             continue
                         kept_dirs.append(name)
                         parents[full] = root
                     except OSError as exc:
                         result["errors"].append({"path": full, "error": str(exc)})
+                        # 即使无权读取属性，也保留资源管理器中的目录项。
+                        parents[full] = root
+                        directory_states[full] = "无法访问，未统计内容"
                 dirs[:] = kept_dirs
                 for name in files:
                     if self._cancel_requested:
@@ -167,11 +176,13 @@ class DiskScannerThread(QThread):
                         attrs = getattr(st, "st_file_attributes", 0)
                         if os.path.islink(path) or attrs & FILE_ATTRIBUTE_REPARSE_POINT:
                             result["skipped_reparse"] += 1
+                            file_leaf_nodes[root].append({
+                                "name": name, "path": path, "size": 0,
+                                "allocated": 0, "file_count": 1,
+                                "folder_count": 0, "is_file": True, "children": [],
+                                "scan_status": "链接文件，未重复扫描",
+                            })
                             continue
-                        identity = (getattr(st, "st_dev", 0), getattr(st, "st_ino", 0))
-                        if identity != (0, 0) and identity in file_ids:
-                            continue
-                        file_ids.add(identity)
                         logical = int(st.st_size)
                         allocated = _allocated_size(path, logical, attrs)
                         cloud_only = bool(attrs & (FILE_ATTRIBUTE_OFFLINE |
@@ -190,12 +201,13 @@ class DiskScannerThread(QThread):
                                 "extension": os.path.splitext(name)[1].lower() or "无扩展名",
                                 "cloud_only": cloud_only,
                             })
-                            # 同时作为 Treemap 叶子节点（如 pagefile.sys 这类大文件）
-                            file_leaf_nodes[root].append({
-                                "name": name, "path": path, "size": logical,
-                                "allocated": allocated, "file_count": 1,
-                                "folder_count": 0, "is_file": True, "children": [],
-                            })
+                        # 所有文件都作为 Treemap 叶子节点（含隐藏文件），
+                        # 保证空间可视化显示该级目录下的全部文件
+                        file_leaf_nodes[root].append({
+                            "name": name, "path": path, "size": logical,
+                            "allocated": allocated, "file_count": 1,
+                            "folder_count": 0, "is_file": True, "children": [],
+                        })
                         advice = _suggestion(path, st.st_mtime, cloud_only)
                         if advice and logical >= self.threshold_bytes:
                             level, reason, risk = advice
@@ -214,6 +226,12 @@ class DiskScannerThread(QThread):
                             self.progress_signal.emit(result["total_files"], 0)
                     except (PermissionError, OSError) as exc:
                         result["errors"].append({"path": path, "error": str(exc)})
+                        file_leaf_nodes[root].append({
+                            "name": name, "path": path, "size": 0,
+                            "allocated": 0, "file_count": 1,
+                            "folder_count": 0, "is_file": True, "children": [],
+                            "scan_status": "无法访问，未统计大小",
+                        })
 
             totals = dict(own_sizes)
             allocated_totals = dict(own_allocated)
@@ -237,7 +255,8 @@ class DiskScannerThread(QThread):
                     "allocated": allocated_totals.get(path, 0),
                     "file_count": file_totals.get(path, 0),
                     "folder_count": folder_totals.get(path, 0),
-                    "children": []
+                    "children": [],
+                    "scan_status": directory_states.get(path, ""),
                 }
             
             # 添加子节点关系
@@ -250,11 +269,13 @@ class DiskScannerThread(QThread):
                 if parent in folder_tree:
                     folder_tree[parent]["children"].extend(leaves)
             
-            # 按大小排序子节点
-            def sort_children(node):
-                node["children"].sort(key=lambda x: x["size"], reverse=True)
-                for child in node["children"]:
-                    sort_children(child)
+            # 按大小排序子节点（迭代实现，避免深目录递归爆栈）
+            def sort_children(root_node):
+                stack = [root_node]
+                while stack:
+                    node = stack.pop()
+                    node["children"].sort(key=lambda x: x["size"], reverse=True)
+                    stack.extend(node["children"])
             
             if self.root_path in folder_tree:
                 sort_children(folder_tree[self.root_path])

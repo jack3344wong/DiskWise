@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+          cache: pip
+      - name: Install locked release dependencies
+        run: python -m pip install -r requirements-win7.txt
+      - name: Run regression tests
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:PYTHONUTF8 = "1"
+          $env:USERPROFILE = Join-Path $env:GITHUB_WORKSPACE ".test-profile"
+          New-Item -ItemType Directory -Force $env:USERPROFILE | Out-Null
+          python test_win7_compatibility.py
+          python test_quick_search_completeness.py
+          python test_fulltext_search.py
+          python -m unittest src.test_phase3
+          python src/duplicate_detector.py
+          python src/file_classifier.py
+          python src/large_file_analyzer.py
+          python test_e2e_treemap.py
+          python test_hidden_files.py
+          python test_treemap_stress.py
+          python test_treemap_visibility.py
+          python test_ui_smoke.py

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""磁盘智理 / DiskWise 主程序入口。"""
+"""文件管家 / FileCare 主程序入口。"""
 import os
 import sys
 from pathlib import Path
@@ -19,9 +19,9 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 
 
-APP_NAME_ZH = "磁盘智理"
-APP_ID = "DiskWise.DiskSpaceAdvisor"
-LOCAL_SERVER_NAME = "DiskWiseSingleInstance"
+APP_NAME_ZH = "文件管家"
+APP_ID = "FileCare.FileManager"
+LOCAL_SERVER_NAME = "FileCareSingleInstance"
 
 
 def _notify_existing_instance():
@@ -67,7 +67,7 @@ def _start_local_server(app):
 
 def _handle_admin_delete_on_startup():
     """启动时检查是否有待删除的文件（管理员权限模式）"""
-    temp_file = Path(os.environ.get('TEMP', '')) / 'diskwise_admin_delete.txt'
+    temp_file = Path(os.environ.get('TEMP', '')) / 'filecare_admin_delete.txt'
     if not temp_file.exists():
         return
     
@@ -113,6 +113,23 @@ def _handle_admin_delete_on_startup():
 
 
 def main():
+    if "--build-name-index" in sys.argv:
+        # 安装器以当前登录用户身份运行，索引会正确写入该用户目录。
+        from PyQt5.QtCore import QCoreApplication
+        from quick_search import build_name_index_sync
+        index_app = QCoreApplication.instance() or QCoreApplication(sys.argv)
+        budget = None
+        if "--index-budget-seconds" in sys.argv:
+            try:
+                value_index = sys.argv.index("--index-budget-seconds") + 1
+                budget = max(1.0, float(sys.argv[value_index]))
+            except (ValueError, IndexError):
+                return 2
+        total, elapsed, errors = build_name_index_sync(
+            time_budget_seconds=budget)
+        print(f"Indexed {total} entries in {elapsed:.1f}s; errors={len(errors)}")
+        return 0 if total > 0 else 2
+
     # 检查是否以管理员权限启动，并处理待删除文件
     _handle_admin_delete_on_startup()
     
@@ -138,7 +155,7 @@ def main():
         app.setApplicationName(APP_NAME_ZH)
         app.setApplicationDisplayName(APP_NAME_ZH)
         resource_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
-        icon_path = resource_root / "assets" / "diskwise.ico"
+        icon_path = resource_root / "assets" / "filecare.ico"
         if icon_path.is_file():
             app.setWindowIcon(QIcon(str(icon_path)))
         app.setStyle("Fusion")  # 统一跨平台基础样式，QSS 在此基础上叠加
@@ -150,11 +167,24 @@ def main():
         window = DiskMonitor()
         window.setObjectName("DiskMonitorMainWindow")
         window.show()
+
+        if "--smoke-test" in sys.argv:
+            # 发布构建自检：验证真实窗口和所有延迟加载的文档解析模块。
+            import docx  # noqa: F401
+            import openpyxl  # noqa: F401
+            import pptx  # noqa: F401
+            import pypdf  # noqa: F401
+            from PIL import Image  # noqa: F401
+            from lxml import etree  # noqa: F401
+            from striprtf.striprtf import rtf_to_text  # noqa: F401
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(750, app.quit)
+            return app.exec_()
         
         # 显示索引提醒弹窗
         _show_index_reminder(window)
         
-        sys.exit(app.exec_())
+        return app.exec_()
     except ImportError as e:
         QMessageBox.critical(None, "启动失败", f"缺少依赖模块:\n{e}\n\n请确保所有代码文件在同一目录下。")
         sys.exit(1)
@@ -172,10 +202,19 @@ def _show_index_reminder(parent):
     reminder_file = Path.home() / ".diskwise" / "hide_index_reminder"
     if reminder_file.exists():
         return
+    try:
+        from quick_search import FileIndexDB
+        index_db = FileIndexDB()
+        has_index = index_db.get_total_count() > 0
+        index_db.close()
+        if has_index:
+            return
+    except Exception:
+        pass
     
     dialog = QDialog(parent)
     dialog.setWindowTitle("索引提示")
-    dialog.setFixedSize(420, 220)
+    dialog.setMinimumWidth(420)
     
     layout = QVBoxLayout(dialog)
     layout.setSpacing(12)
@@ -229,4 +268,4 @@ def _show_index_reminder(parent):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

@@ -40,8 +40,42 @@ def _format_size(size_bytes: int) -> str:
     return f"{size_bytes} B"
 
 
+def _minimum_area_weights(items: list, total_area: float) -> list:
+    """为极小项分配真正可见的像素面积。
+
+    Treemap 仍然按大小表达比例，但从画布中保留一小部分面积给每个
+    目录项。这避免在几十 GB 总量下，空目录的“100 字节虚拟大小”仍然
+    小于一个像素。
+    """
+    if not items or total_area <= 0:
+        return items
+    count = len(items)
+    if count == 1:
+        return [{**items[0], "size": 1.0}]
+
+    # 面积不等于可见：80 px² 仍可能被布局成 0.4×200px 的细线。
+    # 因此按画布短边保留约 4px 的带宽；子项很多时，最多使用
+    # 画布的 35% 作为保底面积，剩余面积仍按真实大小分配。
+    short_side = math.sqrt(total_area)
+    minimum_area = min(max(80.0, short_side * 4.0),
+                       total_area * 0.35 / count)
+    reserved = minimum_area * count
+    proportional_area = max(0.0, total_area - reserved)
+    real_total = sum(max(0.0, float(item.get("size", 0))) for item in items)
+
+    weighted = []
+    for item in items:
+        real_size = max(0.0, float(item.get("size", 0)))
+        share = real_size / real_total if real_total > 0 else 1.0 / count
+        weighted.append({**item, "size": minimum_area + proportional_area * share})
+    return weighted
+
+
 def _squarify(items: list, rect: QRectF) -> List[dict]:
-    """Squarified treemap 布局算法。"""
+    """Squarified treemap 布局算法（迭代实现，避免深递归导致 GUI 线程崩溃）。
+
+    用显式栈替代递归，保证子项数千/万时也能稳定布局（下钻不闪退）。
+    """
     if not items or rect.width() <= 0 or rect.height() <= 0:
         return []
 
@@ -53,9 +87,37 @@ def _squarify(items: list, rect: QRectF) -> List[dict]:
     total_area = rect.width() * rect.height()
     result = []
 
-    def layout_row(row, r, remaining_items):
-        if not row:
-            return remaining_items
+    # 显式栈：(待布局项列表, 剩余矩形)
+    stack = [(sorted_items, rect)]
+    while stack:
+        items_to_layout, r = stack.pop()
+        if not items_to_layout or r.width() <= 0 or r.height() <= 0:
+            continue
+        if len(items_to_layout) == 1:
+            result.append({
+                "node": items_to_layout[0]["node"],
+                "rect": QRectF(r)
+            })
+            continue
+
+        # 贪心分组：把长宽比最差的一行切出来
+        row = [items_to_layout[0]]
+        remaining = items_to_layout[1:]
+        best_ratio = _worst_ratio(row, r, total_size, total_area)
+
+        for i, item in enumerate(items_to_layout[1:], 1):
+            test_row = row + [item]
+            test_ratio = _worst_ratio(test_row, r, total_size, total_area)
+            if test_ratio <= best_ratio:
+                best_ratio = test_ratio
+                row.append(item)
+                # 修复 off-by-one：row 已包含索引 i 处的元素，
+                # 剩余项必须从 i+1 开始，否则最后一项会被重复布局，
+                # 导致面积超分配、后续色块被挤出画布（显示不全）。
+                remaining = items_to_layout[i + 1:]
+            else:
+                break
+
         row_area = sum(item["size"] for item in row) / total_size * total_area
         is_horizontal = r.width() >= r.height()
 
@@ -86,39 +148,9 @@ def _squarify(items: list, rect: QRectF) -> List[dict]:
             remaining_rect = QRectF(r.x(), r.y() + row_height,
                                     r.width(), r.height() - row_height)
 
-        if remaining_items:
-            layout_recursive(remaining_items, remaining_rect)
+        if remaining:
+            stack.append((remaining, remaining_rect))
 
-    def layout_recursive(items_to_layout, r):
-        if not items_to_layout or r.width() <= 0 or r.height() <= 0:
-            return
-        if len(items_to_layout) == 1:
-            result.append({
-                "node": items_to_layout[0]["node"],
-                "rect": QRectF(r)
-            })
-            return
-
-        row = [items_to_layout[0]]
-        remaining = items_to_layout[1:]
-        best_ratio = _worst_ratio(row, r, total_size, total_area)
-
-        for i, item in enumerate(items_to_layout[1:], 1):
-            test_row = row + [item]
-            test_ratio = _worst_ratio(test_row, r, total_size, total_area)
-            if test_ratio <= best_ratio:
-                best_ratio = test_ratio
-                row.append(item)
-                # 修复 off-by-one：row 已包含索引 i 处的元素，
-                # 剩余项必须从 i+1 开始，否则最后一项会被重复布局，
-                # 导致面积超分配、后续色块被挤出画布（显示不全）。
-                remaining = items_to_layout[i + 1:]
-            else:
-                break
-
-        layout_row(row, r, remaining)
-
-    layout_recursive(sorted_items, rect)
     return result
 
 
@@ -210,20 +242,15 @@ class TreemapWidget(QWidget):
             self._emit_navigate()
 
     def drill_down_to_path(self, target_path: str):
-        """下钻到指定路径的节点"""
-        # 在树中查找节点
-        def find_node(node, path):
-            if node.get("path") == path:
-                return node
-            for child in node.get("children", []):
-                result = find_node(child, path)
-                if result:
-                    return result
-            return None
-        
-        target = find_node(self._root_node, target_path)
-        if target and target.get("children"):
-            self.drill_down(target)
+            """下钻到指定路径的节点（迭代查找，避免深目录递归爆栈）"""
+            stack = [self._root_node]
+            while stack:
+                node = stack.pop()
+                if node.get("path") == target_path:
+                    if node.get("children"):
+                        self.drill_down(node)
+                    return
+                stack.extend(node.get("children", []))
 
     def can_go_back(self) -> bool:
         return len(self._history) > 0
@@ -260,11 +287,34 @@ class TreemapWidget(QWidget):
             }]
             return
 
-        # 所有子项都显示，大小为0的给一个最小虚拟尺寸
+        # 所有子项都显示；真正的最小可见面积在获得画布尺寸后计算。
+        # 子项过多时把最小项聚合为"其他 N 项"，防止绘制/布局卡死
+        children = sorted(children, key=lambda c: c.get("size", 0), reverse=True)
         items = []
+        MAX_ITEMS = 3000
+        aggregated = None
+        if len(children) > MAX_ITEMS:
+            kept, rest = children[:MAX_ITEMS - 1], children[MAX_ITEMS - 1:]
+            agg_size = sum(c.get("size", 0) for c in rest)
+            agg_count = len(rest)
+            is_file_agg = all(c.get("is_file") for c in rest)
+            aggregated = {
+                "name": f"其他 {agg_count} 项",
+                "path": self._current_node.get("path", ""),
+                "size": agg_size,
+                "allocated": sum(c.get("allocated", 0) for c in rest),
+                "file_count": sum(c.get("file_count", 0) for c in rest),
+                "folder_count": sum(c.get("folder_count", 0) for c in rest),
+                "is_file": is_file_agg,
+                "children": [],
+                "_aggregated": True,
+            }
+            children = kept
         for c in children:
             size = c.get("size", 0)
-            items.append({"node": c, "size": max(size, 1)})
+            items.append({"node": c, "size": max(size, 0)})
+        if aggregated is not None:
+            items.append({"node": aggregated, "size": max(aggregated["size"], 1)})
 
         if not items:
             self._layout_result = [{
@@ -280,6 +330,7 @@ class TreemapWidget(QWidget):
         if w <= 0 or h <= 0:
             return
         rect = QRectF(margin, margin, w - 2 * margin, h - 2 * margin)
+        items = _minimum_area_weights(items, rect.width() * rect.height())
         self._layout_result = _squarify(items, rect)
 
     def resizeEvent(self, event):
@@ -303,9 +354,12 @@ class TreemapWidget(QWidget):
             node = item["node"]
             rect = item["rect"]
 
-            draw_rect = rect.adjusted(gap / 2, gap / 2, -gap / 2, -gap / 2)
-            if draw_rect.width() < 1 or draw_rect.height() < 1:
+            if rect.width() <= 0 or rect.height() <= 0:
                 continue
+            # 小色块使用自适应间距，避免固定 2px 间距把整个色块吃掉。
+            tile_gap = min(gap, rect.width() / 3, rect.height() / 3)
+            draw_rect = rect.adjusted(
+                tile_gap / 2, tile_gap / 2, -tile_gap / 2, -tile_gap / 2)
 
             color = _color_for_size(node.get("size", 0))
             is_hovered = (self._hovered_item and
@@ -327,6 +381,7 @@ class TreemapWidget(QWidget):
 
             name = node.get("name", "")
             size_str = _format_size(node.get("size", 0))
+            scan_status = node.get("scan_status", "")
             file_count = node.get("file_count", 0)
             is_file = bool(node.get("is_file"))
             icon = "📄" if is_file else "📁"
@@ -341,7 +396,7 @@ class TreemapWidget(QWidget):
                 painter.setFont(self._small_font)
                 painter.drawText(
                     draw_rect.adjusted(6, 8 + fm.height() + 2, -6, 0),
-                    Qt.AlignLeft | Qt.AlignTop, size_str)
+                    Qt.AlignLeft | Qt.AlignTop, scan_status or size_str)
                 sub_color = QColor(30, 30, 30, 200) if brightness > 150 else QColor(255, 255, 255, 200)
                 painter.setPen(sub_color)
                 painter.setFont(self._tiny_font)
@@ -395,6 +450,8 @@ class TreemapWidget(QWidget):
                    f"文件: {node.get('file_count', 0)} 个\n"
                    f"文件夹: {node.get('folder_count', 0)} 个\n"
                    f"路径: {node.get('path', '')}")
+            if node.get("scan_status"):
+                tip += f"\n状态: {node['scan_status']}"
             QToolTip.showText(event.globalPos(), tip, self)
             if node.get("children"):
                 self.setCursor(Qt.PointingHandCursor)
